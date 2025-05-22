@@ -170,6 +170,7 @@ struct Token {
     Token(SourceLocation s, std::string t) : sl(s), text(std::move(t)) {}
 
     SourceLocation sl;
+    // for string literals, use the original (quoted) versions in the source stream
     std::string text;
 };
 
@@ -273,13 +274,14 @@ std::deque<Token> lex(std::string source) {
 // ------------------------------
 
 enum class TraversalMode {
-    topDown,
-    bottomUp
+    TOP_DOWN,
+    BOTTOM_UP
 };
 
 // this also prevents implicitly-declared move constructors and move assignment operators
-#define DELETE_COPY(CLASS)\
-    CLASS(const CLASS &) = delete;\
+// use clone() to copy the entire tree
+#define DELETE_COPY(CLASS) \
+    CLASS(const CLASS &) = delete; \
     CLASS &operator=(const CLASS &) = delete
 
 struct ExprNode {
@@ -290,26 +292,30 @@ struct ExprNode {
     virtual ExprNode *clone() const = 0;
     virtual void traverse(
         TraversalMode mode,
-        std::function<void(ExprNode*)> &callback  // callback may have states
+        // callback may have states
+        std::function<void(ExprNode*)> &callback
     ) = 0;
     virtual std::string toString() const = 0;
     virtual void computeFreeVars() = 0;
     virtual void computeTail(bool parentTail) = 0;
 
     SourceLocation sl;
+    // static information for free variables in the expression
     std::unordered_set<std::string> freeVars;
+    // static information for tail position in the parent expression
     bool tail = false;
 };
 
 // every value is accessed by reference to its location on the heap 
 using Location = int;
 
+// AST nodes store original tokens (string for IntegerNode)
 struct IntegerNode : public ExprNode {
     DELETE_COPY(IntegerNode);
     virtual ~IntegerNode() {}
     IntegerNode(SourceLocation s, std::string v): ExprNode(s), val(std::move(v)) {}
 
-    // covariant return type
+    // covariant return type for override
     virtual IntegerNode *clone() const override {
         auto inode = new IntegerNode(sl, val);
         inode->freeVars = freeVars;
@@ -332,9 +338,11 @@ struct IntegerNode : public ExprNode {
     }
 
     std::string val;
+    // location on the heap: statically pre-computed
     Location loc = -1;
 };
 
+// AST nodes store original tokens (quoted string for StringNode)
 struct StringNode : public ExprNode {
     DELETE_COPY(StringNode);
     virtual ~StringNode() {}
@@ -363,6 +371,7 @@ struct StringNode : public ExprNode {
     }
 
     std::string val;
+    // location on the heap: statically pre-computed
     Location loc = -1;
 };
 
@@ -422,7 +431,7 @@ struct LambdaNode : public ExprNode {
         TraversalMode mode,
         std::function<void(ExprNode*)> &callback
     ) override {
-        if (mode == TraversalMode::topDown) {
+        if (mode == TraversalMode::TOP_DOWN) {
             callback(this);
             _traverseSubtree(mode, callback);
         } else {
@@ -497,7 +506,7 @@ struct LetrecNode : public ExprNode {
         TraversalMode mode,
         std::function<void(ExprNode*)> &callback
     ) override {
-        if (mode == TraversalMode::topDown) {
+        if (mode == TraversalMode::TOP_DOWN) {
             callback(this);
             _traverseSubtree(mode, callback);
         } else {
@@ -573,7 +582,7 @@ struct IfNode : public ExprNode {
         TraversalMode mode,
         std::function<void(ExprNode*)> &callback
     ) override {
-        if (mode == TraversalMode::topDown) {
+        if (mode == TraversalMode::TOP_DOWN) {
             callback(this);
             _traverseSubtree(mode, callback);
         } else {
@@ -634,7 +643,7 @@ struct SequenceNode : public ExprNode {
         TraversalMode mode,
         std::function<void(ExprNode*)> &callback
     ) override {
-        if (mode == TraversalMode::topDown) {
+        if (mode == TraversalMode::TOP_DOWN) {
             callback(this);
             _traverseSubtree(mode, callback);
         } else {
@@ -702,7 +711,7 @@ struct IntrinsicCallNode : public ExprNode {
         TraversalMode mode,
         std::function<void(ExprNode*)> &callback
     ) override {
-        if (mode == TraversalMode::topDown) {
+        if (mode == TraversalMode::TOP_DOWN) {
             callback(this);
             _traverseSubtree(mode, callback);
         } else {
@@ -768,7 +777,7 @@ struct ExprCallNode : public ExprNode {
         TraversalMode mode,
         std::function<void(ExprNode*)> &callback
     ) override {
-        if (mode == TraversalMode::topDown) {
+        if (mode == TraversalMode::TOP_DOWN) {
             callback(this);
             _traverseSubtree(mode, callback);
         } else {
@@ -831,7 +840,7 @@ struct AtNode : public ExprNode {
         TraversalMode mode,
         std::function<void(ExprNode*)> &callback
     ) override {
-        if (mode == TraversalMode::topDown) {
+        if (mode == TraversalMode::TOP_DOWN) {
             callback(this);
             _traverseSubtree(mode, callback);
         } else {
@@ -994,6 +1003,7 @@ ExprNode *parse(std::deque<Token> tokens) {
     parseExpr = [&]() -> ExprNode* {
         if (!tokens.size()) {
             panic("parser", "incomplete token stream");
+            // unreachable
             return nullptr;
         } else if (isIntegerToken(tokens[0])) {
             return parseInteger();
@@ -1013,6 +1023,7 @@ ExprNode *parse(std::deque<Token> tokens) {
         } else if (tokens[0].text == "(") {
             if (tokens.size() < 2) {
                 panic("parser", "incomplete token stream");
+                // unreachable
                 return nullptr;
             }
             if (isIntrinsicToken(tokens[1])) {
@@ -1024,15 +1035,254 @@ ExprNode *parse(std::deque<Token> tokens) {
             return parseAt();
         } else {
             panic("parser", "unrecognized token", tokens[0].sl);
+            // unreachable
             return nullptr;
         }
     };
 
     auto expr = parseExpr();
-    if (tokens.size()) {
-        panic("parser", "redundant token(s)", tokens[0].sl);
-    }
     return expr;
+}
+
+std::vector<int> encodeNodePath(const ExprNode *node, const ExprNode *root) {
+    if (node == nullptr) {
+        panic("serialization", "node is nullptr");
+        // unreachable
+        return std::vector<int>();
+    }
+    if (root == nullptr) {
+        panic("serialization", "root is nullptr");
+        // unreachable
+        return std::vector<int>();
+    }
+    std::vector<int> nodePath;
+    std::function<bool(std::vector<int>&, const ExprNode*)>
+        findPath = [&](std::vector<int> &curPath, const ExprNode *curNode) -> bool {
+        if (curNode == node) {
+            // copy
+            nodePath = curPath;
+            return true;
+        } else {
+            if (auto inode = dynamic_cast<const IntegerNode*>(curNode)) {
+                return false;
+            } else if (auto snode = dynamic_cast<const StringNode*>(curNode)) {
+                return false;
+            } else if (auto vnode = dynamic_cast<const VariableNode*>(curNode)) {
+                return false;
+            } else if (auto lnode = dynamic_cast<const LambdaNode*>(curNode)) {
+                int numArgs = lnode->varList.size();
+                for (int i = 0; i < numArgs; i++) {
+                    curPath.push_back(i);
+                    if (findPath(curPath, lnode->varList[i])) {
+                        return true;
+                    }
+                    curPath.pop_back();
+                }
+                curPath.push_back(numArgs);
+                if (findPath(curPath, lnode->expr)) {
+                    return true;
+                }
+                curPath.pop_back();
+                return false;
+            } else if (auto lnode = dynamic_cast<const LetrecNode*>(curNode)) {
+                int numVars = lnode->varExprList.size();
+                for (int i = 0; i < numVars; i++) {
+                    curPath.push_back(2 * i);
+                    if (findPath(curPath, lnode->varExprList[i].first)) {
+                        return true;
+                    }
+                    curPath.pop_back();
+                    curPath.push_back(2 * i + 1);
+                    if (findPath(curPath, lnode->varExprList[i].second)) {
+                        return true;
+                    }
+                    curPath.pop_back();
+                }
+                curPath.push_back(2 * numVars);
+                if (findPath(curPath, lnode->expr)) {
+                    return true;
+                }
+                curPath.pop_back();
+                return false;
+            } else if (auto inode = dynamic_cast<const IfNode*>(curNode)) {
+                curPath.push_back(0);
+                if (findPath(curPath, inode->cond)) {
+                    return true;
+                }
+                curPath.pop_back();
+                curPath.push_back(1);
+                if (findPath(curPath, inode->branch1)) {
+                    return true;
+                }
+                curPath.pop_back();
+                curPath.push_back(2);
+                if (findPath(curPath, inode->branch2)) {
+                    return true;
+                }
+                curPath.pop_back();
+                return false;
+            } else if (auto snode = dynamic_cast<const SequenceNode*>(curNode)) {
+                int numExprs = snode->exprList.size();
+                for (int i = 0; i < numExprs; i++) {
+                    curPath.push_back(i);
+                    if (findPath(curPath, snode->exprList[i])) {
+                        return true;
+                    }
+                    curPath.pop_back();
+                }
+                return false;
+            } else if (auto inode = dynamic_cast<const IntrinsicCallNode*>(curNode)) {
+                int numArgs = inode->argList.size();
+                for (int i = 0; i < numArgs; i++) {
+                    curPath.push_back(i);
+                    if (findPath(curPath, inode->argList[i])) {
+                        return true;
+                    }
+                    curPath.pop_back();
+                }
+                return false;
+            } else if (auto enode = dynamic_cast<const ExprCallNode*>(curNode)) {
+                curPath.push_back(0);
+                if (findPath(curPath, enode->expr)) {
+                    return true;
+                }
+                curPath.pop_back();
+                int numArgs = enode->argList.size();
+                for (int i = 0; i < numArgs; i++) {
+                    curPath.push_back(i + 1);
+                    if (findPath(curPath, enode->argList[i])) {
+                        return true;
+                    }
+                    curPath.pop_back();
+                }
+                return false;
+            } else if (auto anode = dynamic_cast<const AtNode*>(curNode)) {
+                curPath.push_back(0);
+                if (findPath(curPath, anode->var)) {
+                    return true;
+                }
+                curPath.pop_back();
+                curPath.push_back(1);
+                if (findPath(curPath, anode->expr)) {
+                    return true;
+                }
+                curPath.pop_back();
+                return false;
+            } else {
+                panic("serialization", "unrecognized AST node");
+                // unreachable
+                return false;
+            }
+        }
+    };
+    std::vector<int> currentPath;
+    if (findPath(currentPath, root)) {
+        return nodePath;
+    } else {
+        panic("serialization", "node not found", node->sl);
+        // unreachable
+        return std::vector<int>();
+    }
+}
+
+const ExprNode *decodeNodePath(const std::vector<int> &path, const ExprNode *root) {
+    const ExprNode *curNode = root;
+    for (int i : path) {
+        if (auto inode = dynamic_cast<const IntegerNode*>(curNode)) {
+            return nullptr;
+        } else if (auto snode = dynamic_cast<const StringNode*>(curNode)) {
+            return nullptr;
+        } else if (auto vnode = dynamic_cast<const VariableNode*>(curNode)) {
+            return nullptr;
+        } else if (auto lnode = dynamic_cast<const LambdaNode*>(curNode)) {
+            int numArgs = lnode->varList.size();
+            if (i < numArgs) {
+                curNode = lnode->varList[i];
+            } else if (i == numArgs) {
+                curNode = lnode->expr;
+            } else {
+                return nullptr;
+            }
+        } else if (auto lnode = dynamic_cast<const LetrecNode*>(curNode)) {
+            int numVars = lnode->varExprList.size();
+            if (i < numVars * 2) {
+                int index = i / 2;
+                int offset = i % 2;
+                if (offset == 0) {
+                    curNode = lnode->varExprList[index].first;
+                } else {
+                    curNode = lnode->varExprList[index].second;
+                }
+            } else if (i == numVars * 2) {
+                curNode = lnode->expr;
+            } else {
+                return nullptr;
+            }
+        } else if (auto inode = dynamic_cast<const IfNode*>(curNode)) {
+            if (i == 0) {
+                curNode = inode->cond;
+            } else if (i == 1) {
+                curNode = inode->branch1;
+            } else if (i == 2) {
+                curNode = inode->branch2;
+            } else {
+                return nullptr;
+            }
+        } else if (auto snode = dynamic_cast<const SequenceNode*>(curNode)) {
+            int numExprs = snode->exprList.size();
+            if (i < numExprs) {
+                curNode = snode->exprList[i];
+            } else {
+                return nullptr;
+            }
+        } else if (auto inode = dynamic_cast<const IntrinsicCallNode*>(curNode)) {
+            int numArgs = inode->argList.size();
+            if (i < numArgs) {
+                curNode = inode->argList[i];
+            } else {
+                return nullptr;
+            }
+        } else if (auto enode = dynamic_cast<const ExprCallNode*>(curNode)) {
+            if (i == 0) {
+                curNode = enode->expr;
+            } else {
+                int numArgs = enode->argList.size();
+                if (i <= numArgs) {
+                    curNode = enode->argList[i - 1];
+                } else {
+                    return nullptr;
+                }
+            }
+        } else if (auto anode = dynamic_cast<const AtNode*>(curNode)) {
+            if (i == 0) {
+                curNode = anode->var;
+            } else if (i == 1) {
+                curNode = anode->expr;
+            } else {
+                return nullptr;
+            }
+        } else {
+            panic("serialization", "unrecognized AST node");
+        }
+    }
+    return curNode;
+}
+
+using Path = std::vector<int>;
+
+std::string pathToString(const Path &path) {
+    std::string s = "[";
+    for (int i : path) {
+        s += " ";
+        s += std::to_string(i);
+    }
+    s += " ]";
+    return s;
+}
+
+Path stringToPath(const std::string &s) {
+    // TODO
+    return Path();
 }
 
 // ------------------------------
@@ -1070,6 +1320,23 @@ struct String {  // for string literals, this class contains the unquoted ones
 // variable environment; newer variables have larger indices
 using Env = std::vector<std::pair<std::string, Location>>;
 
+std::string envToString(const Env &env) {
+    std::string s = "[";
+    for (auto &p : env) {
+        s += " ";
+        s += p.first;
+        s += " ";
+        s += std::to_string(p.second);
+    }
+    s += " ]";
+    return s;
+}
+
+Env stringToEnv(const std::string &s) {
+    // TODO
+    return Env();
+}
+
 std::optional<Location> lookup(const std::string &name, const Env &env) {
     for (auto p = env.rbegin(); p != env.rend(); p++) {
         if (p->first == name) {
@@ -1083,8 +1350,11 @@ struct Closure {
     // a closure should copy its environment
     Closure(Env e, const LambdaNode *f): env(std::move(e)), fun(f) {}
 
-    std::string toString() const {
-        return "<closure evaluated at " + fun->sl.toString() + ">";
+    std::string toString(const ExprNode *root) const {
+        std::string s = envToString(env);
+        s += " ";
+        s += pathToString(encodeNodePath(fun, root));
+        return s;
     }
 
     Env env;
@@ -1093,7 +1363,7 @@ struct Closure {
 
 using Value = std::variant<Void, Integer, String, Closure>;
 
-std::string valueToString(const Value &v) {
+std::string valueToString(const Value &v, const ExprNode *root) {
     if (std::holds_alternative<Void>(v)) {
         return std::get<Void>(v).toString();
     } else if (std::holds_alternative<Integer>(v)) {
@@ -1101,8 +1371,13 @@ std::string valueToString(const Value &v) {
     } else if (std::holds_alternative<String>(v)) {
         return std::get<String>(v).toString();
     } else {
-        return std::get<Closure>(v).toString();
+        return std::get<Closure>(v).toString(root);
     }
+}
+
+Value stringToValue(const std::string &s) {
+    // TODO
+    return Void();
 }
 
 // stack layer
@@ -1112,12 +1387,49 @@ struct Layer {
     // that argument (not important here)
     Layer(std::shared_ptr<Env> e, const ExprNode *x, bool f = false):
         env(std::move(e)), expr(x), frame(f) {}
+    
+    Layer(std::string) {
+        // TODO: deserialize
+    }
 
+    std::string serialize(const ExprNode *root) const {
+        std::string serialized_layer;
+        // bool frame;
+        if (frame) {
+            serialized_layer += "frame";
+        } else {
+            serialized_layer += "nonframe";
+        }
+        // std::shared_ptr<Env> env;
+        if (frame) {
+            serialized_layer += " ";
+            serialized_layer += envToString(*env);
+        }
+        // const ExprNode *expr;
+        serialized_layer += " ";
+        if (expr != nullptr) {
+            serialized_layer += pathToString(encodeNodePath(expr, root));
+        } else {
+            serialized_layer += "[ -1 ]";
+        }
+        // int pc = 0;
+        serialized_layer += " ";
+        serialized_layer += std::to_string(pc);
+        // std::vector<Location> local;
+        serialized_layer += " [";
+        for (auto &l : local) {
+            serialized_layer += " ";
+            serialized_layer += std::to_string(l);
+        }
+        serialized_layer += " ]";
+        return serialized_layer;
+    }
+
+    // whether this is a frame
+    bool frame;
     // one env per frame (closure call layer)
     std::shared_ptr<Env> env;
     const ExprNode *expr;
-    // whether this is a frame
-    bool frame;
     // program counter inside this expr
     int pc = 0;
     // temporary local information for evaluation
@@ -1126,9 +1438,10 @@ struct Layer {
 
 class State {
 public:
-    State(std::string source) {
+    State(std::string src) {
+        source = std::move(src);
         // parsing and static analysis (TODO: exceptions?)
-        expr = parse(lex(std::move(source)));
+        expr = parse(lex(source));
         std::function<void(ExprNode*)> checkDuplicate = [](ExprNode *e) -> void {
             if (auto lnode = dynamic_cast<LambdaNode*>(e)) {
                 std::unordered_set<std::string> varNames;
@@ -1148,18 +1461,19 @@ public:
                 }
             }
         };
-        expr->traverse(TraversalMode::topDown, checkDuplicate);
+        expr->traverse(TraversalMode::TOP_DOWN, checkDuplicate);
         expr->computeFreeVars();
         expr->computeTail(false);
         // pre-allocate integer literals and string literals
         std::function<void(ExprNode*)> preAllocate = [this](ExprNode *e) -> void {
             if (auto inode = dynamic_cast<IntegerNode*>(e)) {
-                inode->loc = this->_new<Integer>(std::stoi(inode->val));  // TODO: exceptions
+                // TODO: exceptions
+                inode->loc = this->_new<Integer>(std::stoi(inode->val));
             } else if (auto snode = dynamic_cast<StringNode*>(e)) {
                 snode->loc = this->_new<String>(unquote(snode->val));
             }
         };
-        expr->traverse(TraversalMode::topDown, preAllocate);
+        expr->traverse(TraversalMode::TOP_DOWN, preAllocate);
         numLiterals = heap.size();
         // the main frame (which cannot be removed by TCO)
         stack.emplace_back(std::make_shared<Env>(), nullptr, true);
@@ -1167,6 +1481,7 @@ public:
         stack.emplace_back(stack.back().env, expr);
     }
     State(const State &state):
+        source(state.source),
         expr(state.expr->clone()),
         stack(state.stack),
         heap(state.heap),
@@ -1175,6 +1490,7 @@ public:
     }
     State &operator=(const State &state) {
         if (this != &state) {
+            source = state.source;
             delete expr;
             expr = state.expr->clone();
             stack = state.stack;
@@ -1185,6 +1501,7 @@ public:
         return *this;
     }
     State(State &&state):
+        source(std::move(state.source)),
         expr(state.expr),
         stack(std::move(state.stack)),
         heap(std::move(state.heap)),
@@ -1194,6 +1511,7 @@ public:
     }
     State &operator=(State &&state) {
         if (this != &state) {
+            source = std::move(state.source);
             delete expr;
             expr = state.expr;
             state.expr = nullptr;
@@ -1481,6 +1799,36 @@ public:
     const Value &getResult() const {
         return heap[resultLoc];
     }
+    const ExprNode *getExpr() const {
+        return expr;
+    }
+    std::string serialize() const {
+        std::string serialized_state;
+        // std::string source;
+        serialized_state += source;
+        // (skipped, because source is more accurate) ExprNode *expr;
+        // std::vector<Layer> stack;
+        serialized_state += " [";
+        for (auto &layer : stack) {
+            serialized_state += " ";
+            serialized_state += layer.serialize(expr);
+        }
+        serialized_state += " ]";
+        // std::vector<Value> heap;
+        serialized_state += " [";
+        for (auto &value : heap) {
+            serialized_state += " ";
+            serialized_state += valueToString(value, expr);
+        }
+        serialized_state += " ]";
+        // int numLiterals = 0;
+        serialized_state += " ";
+        serialized_state += std::to_string(numLiterals);
+        // Location resultLoc;
+        serialized_state += " ";
+        serialized_state += std::to_string(resultLoc);
+        return serialized_state;
+    }
 private:
     template <typename... Alt>
     requires (true && ... && (std::same_as<Alt, Value> || isAlternativeOf<Alt, Value>))
@@ -1727,6 +2075,7 @@ private:
         } else {
             _errorStack();
             panic("runtime", "unrecognized intrinsic call", sl);
+            // unreachable
             return Void();
         }
     }
@@ -1850,11 +2199,12 @@ private:
     }
 
     // states
+    std::string source;
     ExprNode *expr;
     std::vector<Layer> stack;
     std::vector<Value> heap;
     int numLiterals = 0;
-    Location resultLoc;
+    Location resultLoc = -1;
 };
 
 // ------------------------------
@@ -1886,7 +2236,10 @@ int main(int argc, char **argv) {
         std::string source = readSource(argv[1]);
         State state(std::move(source));
         state.execute();
-        std::cout << "<end-of-stdout>\n" << valueToString(state.getResult()) << std::endl;
+        std::cout << "<end-of-stdout>\n"
+                  << valueToString(state.getResult(), state.getExpr()) << std::endl;
+        std::cerr << "***** final state serialization *****\n"
+                  << '|' << state.serialize() << '|' << std::endl;
     } catch (const std::runtime_error &e) {
         std::cerr << e.what() << std::endl;
         std::exit(EXIT_FAILURE);

@@ -5,7 +5,7 @@
 **Clo**sure **calc**ulus is an interpreted functional programming language.
 See [test/](test/) for code examples (`*.clo`).
 
-## syntax, semantics, and implementation
+## syntax
 
 ```
 <comment>   := #[^\n]*\n
@@ -33,32 +33,9 @@ See [test/](test/) for code examples (`*.clo`).
              | @ <variable> <expr>  // accesses a closure's environment variable
 ```
 
-+ AST-traversal based interpreter; no bytecode.
-+ 4 object types: Void, Integer, String, Closure.
-  Structs can be realized by closures and `@`.
-+ Variables are references to objects,
-  but behave like values because objects are immutable.
-  Variables cannot be re-bound.
-+ `letrec` and `( <callee> <expr>* )` evaluate from left to right
-  and use pass-by-reference for variables.
-+ Threshold-based tracing garbage collection with memory compaction.
-+ Tail-call optimization,
-  closure size optimization (omitting unused environment variables),
-  literal object pre-allocation.
-  Note: for better error messages during debugging,
-  use `letrec` to rewrite tail calls to
-  preserve stack frames.
-+ The runtime state (including stack, heap, etc.)
-  is copyable and movable, and can be executed step-by-step.
-  So it's easy to suspend/resume executions.
-
 ## dependencies
 
-The debug mode uses Clang-specific flags,
-so we use Make instead of CMake.
-This project was tested on Linux and macOS,
-but should also compile on Windows
-if you adjust the build tools.
+This project was tested on macOS.
 
 + `clang++` with C++20 support
 + `make`

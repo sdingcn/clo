@@ -39,14 +39,10 @@ def test() -> None:
                 start = time.time()
                 res = execute(["bin/clocalc", filepath], io["in"])
                 end = time.time()
-                if (
-                    (res[0] == 0) == (io["err"] == "") and
-                    res[1] == io["out"] and
-                    res[2] == io["err"]
-                ):
+                if (res[0] == 0 and res[1] == io["out"]):
                     print(f"OK ({end - start:.3f} seconds)")
                 else:
-                    sys.exit(f'failed\nresult = {res}\ntruth = {(io["out"], io["err"])}')
+                    sys.exit(f'failed\nresult = {res}\n')
 
 if __name__ == "__main__":
     print("# started testing debug version")

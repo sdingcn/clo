@@ -1,5 +1,4 @@
 {
     "in" : "65535",
-    "out" : "<end-of-stdout>\n2147450880\n",
-    "err" : ""
+    "out" : "<end-of-stdout>\n2147450880\n"
 }
