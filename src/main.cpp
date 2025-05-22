@@ -12,6 +12,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <sstream>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
@@ -21,1426 +22,1536 @@
 
 namespace utils {
 
-// ------------------------------
-// global utils
-// ------------------------------
+    // ------------------------------
+    // global utils
+    // ------------------------------
 
-template <typename Type, typename Variant>
-struct isAlternativeOfHelper {
-    static constexpr bool value = false;
-};
+    template <typename Type, typename Variant>
+    struct isAlternativeOfHelper {
+        static constexpr bool value = false;
+    };
 
-template <typename Type, typename... Alternative>
-requires ((0 + ... + (std::same_as<Type, Alternative> ? 1 : 0)) == 1)
-struct isAlternativeOfHelper<Type, std::variant<Alternative...>> {
-    static constexpr bool value = true;
-};
+    template <typename Type, typename... Alternative>
+        requires ((0 + ... + (std::same_as<Type, Alternative> ? 1 : 0)) == 1)
+    struct isAlternativeOfHelper<Type, std::variant<Alternative...>> {
+        static constexpr bool value = true;
+    };
 
-template <typename Type, typename Variant>
-constexpr bool isAlternativeOf = isAlternativeOfHelper<Type, Variant>::value;
+    template <typename Type, typename Variant>
+    constexpr bool isAlternativeOf = isAlternativeOfHelper<Type, Variant>::value;
 
-struct SourceLocation {
-    SourceLocation(int l = 1, int c = 1): line(l), column(c) {}
+    struct SourceLocation {
+        SourceLocation(int l = 1, int c = 1) : line(l), column(c) {}
 
-    std::string toString() const {
-        if (line <= 0 || column <= 0) {
-            return "(SourceLocation N/A)";
+        std::string toString() const {
+            if (line <= 0 || column <= 0) {
+                return "(SourceLocation N/A)";
+            }
+            return "(SourceLocation " + std::to_string(line) + " " + std::to_string(column) + ")";
         }
-        return "(SourceLocation " + std::to_string(line) + " " + std::to_string(column) + ")";
-    }
-    void revert() {
-        line = 1;
-        column = 1;
-    }
-    void update(char c) {
-        if (c == '\n') {
-            line++;
+        void revert() {
+            line = 1;
             column = 1;
-        } else {
-            column++;
         }
+        void update(char c) {
+            if (c == '\n') {
+                line++;
+                column = 1;
+            }
+            else {
+                column++;
+            }
+        }
+
+        int line;
+        int column;
+    };
+
+    void panic(
+        const std::string& type,
+        const std::string& msg,
+        const SourceLocation& sl = SourceLocation(0, 0)
+    ) {
+        throw std::runtime_error("[" + type + " error " + sl.toString() + "] " + msg);
     }
-
-    int line;
-    int column;
-};
-
-void panic(
-    const std::string &type,
-    const std::string &msg,
-    const SourceLocation &sl = SourceLocation(0, 0)
-) {
-    throw std::runtime_error("[" + type + " error " + sl.toString() + "] " + msg);
-}
 
 }  // namespace utils
 
 namespace syntax {
 
-// ------------------------------
-// lexer
-// ------------------------------
+    // ------------------------------
+    // lexer
+    // ------------------------------
 
-std::string quote(std::string s) {
-    std::string r;
-    r += '\"';
-    for (char c : s) {
-        if (c == '\\') {
-            r += "\\\\";
-        } else if (c == '\"') {
-            r += "\\\"";
-        } else {
-            r += c;
-        }
-    }
-    r += '\"';
-    return r;
-}
-
-std::string unquote(std::string s) {
-    int n = s.size();
-    if (!((n >= 2) &&
-          (s[0] == '\"') &&
-          (s[n - 1] == '\"'))) {
-        utils::panic("unquote", "invalid quoted string");
-    }
-    s = s.substr(1, n - 2);
-    std::reverse(s.begin(), s.end());
-    std::string r;
-    while (s.size()) {
-        char c = s.back();
-        s.pop_back();
-        if (c == '\\') {
-            if (s.size()) {
-                char c1 = s.back();
-                s.pop_back();
-                if (c1 == '\\') {
-                    r += '\\';
-                } else if (c1 == '"') {
-                    r += '"';
-                } else if (c1 == 't') {
-                    r += '\t';
-                } else if (c1 == 'n') {
-                    r += '\n';
-                } else {
-                    utils::panic("unquote", "invalid escape sequence");
-                }
-            } else {
-                utils::panic("unquote", "incomplete escape sequence");
+    std::string quote(std::string s) {
+        std::string r;
+        r += '\"';
+        for (char c : s) {
+            if (c == '\\') {
+                r += "\\\\";
             }
-        } else {
-            r += c;
-        }
-    }
-    return r;
-}
-
-struct SourceStream {
-    SourceStream(std::string s): source(std::move(s)) {
-        std::string charstr =
-            "`1234567890-=~!@#$%^&*()_+"
-            "qwertyuiopasdfghjklzxcvbnmQWERTYUIOPASDFGHJKLZXCVBNM"
-            "[]\\;',./{}|:\"<>? \t\n";
-        std::unordered_set<char> charset(charstr.begin(), charstr.end());
-        for (char c : source) {
-            if (!charset.contains(c)) {
-                utils::panic("lexer", "unsupported character", sl);
+            else if (c == '\"') {
+                r += "\\\"";
             }
-            sl.update(c);
-        }
-        sl.revert();
-        std::reverse(source.begin(), source.end());
-    }
-
-    bool hasNext() const {
-        return source.size() > 0;
-    }
-    char peekNext() const {
-        return source.back();
-    }
-    char popNext() {
-        char c = source.back();
-        source.pop_back();
-        sl.update(c);
-        return c;
-    }
-    utils::SourceLocation getNextSourceLocation() const {
-        return sl;
-    }
-
-    std::string source;
-    utils::SourceLocation sl;
-};
-
-struct Token {
-    Token(utils::SourceLocation s, std::string t) : sl(s), text(std::move(t)) {}
-
-    utils::SourceLocation sl;
-    // for string literals, use the original (quoted) versions in the source stream
-    std::string text;
-};
-
-std::deque<Token> lex(std::string source) {
-    SourceStream ss(std::move(source));
-
-    std::function<std::optional<Token>()> nextToken =
-        [&ss, &nextToken]() -> std::optional<Token> {
-        // skip whitespaces
-        while (ss.hasNext() && std::isspace(ss.peekNext())) {
-            ss.popNext();
-        }
-        if (!ss.hasNext()) {
-            return std::nullopt;
-        }
-        // read the next token
-        auto startsl = ss.getNextSourceLocation();
-        std::string text = "";
-        // integer literal
-        if (std::isdigit(ss.peekNext()) || ss.peekNext() == '-' || ss.peekNext() == '+') {
-            if (ss.peekNext() == '-' || ss.peekNext() == '+') {
-                text += ss.popNext();
+            else {
+                r += c;
             }
-            bool hasDigit = false;
-            while (ss.hasNext() && std::isdigit(ss.peekNext())) {
-                hasDigit = true;
-                text += ss.popNext();
-            }
-            if (!hasDigit) {
-                utils::panic("lexer", "incomplete integer literal", startsl);
-            }
-        // string literal
-        } else if (ss.peekNext() == '"') {
-            text += ss.popNext();
-            bool complete = false;
-            bool escape = false;
-            while (ss.hasNext()) {
-                if ((!escape) && ss.peekNext() == '"') {
-                    text += ss.popNext();
-                    complete = true;
-                    break;
-                } else {
-                    char c = ss.popNext();
-                    if (c == '\\') {
-                        escape = true;
-                    } else {
-                        escape = false;
+        }
+        r += '\"';
+        return r;
+    }
+
+    std::string unquote(std::string s) {
+        int n = s.size();
+        if (!((n >= 2) &&
+            (s[0] == '\"') &&
+            (s[n - 1] == '\"'))) {
+            utils::panic("unquote", "invalid quoted string");
+        }
+        s = s.substr(1, n - 2);
+        std::reverse(s.begin(), s.end());
+        std::string r;
+        while (s.size()) {
+            char c = s.back();
+            s.pop_back();
+            if (c == '\\') {
+                if (s.size()) {
+                    char c1 = s.back();
+                    s.pop_back();
+                    if (c1 == '\\') {
+                        r += '\\';
                     }
-                    text += c;
+                    else if (c1 == '"') {
+                        r += '"';
+                    }
+                    else if (c1 == 't') {
+                        r += '\t';
+                    }
+                    else if (c1 == 'n') {
+                        r += '\n';
+                    }
+                    else {
+                        utils::panic("unquote", "invalid escape sequence");
+                    }
+                }
+                else {
+                    utils::panic("unquote", "incomplete escape sequence");
                 }
             }
-            if (!complete) {
-                utils::panic("lexer", "incomplete string literal", startsl);
+            else {
+                r += c;
             }
-        // variable / keyword
-        } else if (std::isalpha(ss.peekNext()) || ss.peekNext() == '_') {
-            while (
-                ss.hasNext() && (
-                    std::isalpha(ss.peekNext()) ||
-                    std::isdigit(ss.peekNext()) ||
-                    ss.peekNext() == '_'
-                )
-            ) {
-               text += ss.popNext();
-            }
-        // intrinsic
-        } else if (ss.peekNext() == '.') {
-            while (ss.hasNext() && !(std::isspace(ss.peekNext()) || ss.peekNext() == ')')) {
-                text += ss.popNext();
-            }
-        // special symbol
-        } else if (std::string("(){}@").find(ss.peekNext()) != std::string::npos) {
-            text += ss.popNext();
-        // comment
-        } else if (ss.peekNext() == '#') {
-            while (ss.hasNext() && ss.peekNext() != '\n') {
-                ss.popNext();
-            }
-            // nextToken() will consume the \n and recursively continue
-            return nextToken();
-        } else {
-            utils::panic("lexer", "unsupported starting character", startsl);
         }
-        return Token(startsl, std::move(text));
+        return r;
+    }
+
+    struct SourceStream {
+        SourceStream(std::string s) : source(std::move(s)) {
+            std::string charstr =
+                "`1234567890-=~!@#$%^&*()_+"
+                "qwertyuiopasdfghjklzxcvbnmQWERTYUIOPASDFGHJKLZXCVBNM"
+                "[]\\;',./{}|:\"<>? \t\n";
+            std::unordered_set<char> charset(charstr.begin(), charstr.end());
+            for (char c : source) {
+                if (!charset.contains(c)) {
+                    utils::panic("lexer", "unsupported character", sl);
+                }
+                sl.update(c);
+            }
+            sl.revert();
+            std::reverse(source.begin(), source.end());
+        }
+
+        bool hasNext() const {
+            return source.size() > 0;
+        }
+        char peekNext() const {
+            return source.back();
+        }
+        char popNext() {
+            char c = source.back();
+            source.pop_back();
+            sl.update(c);
+            return c;
+        }
+        utils::SourceLocation getNextSourceLocation() const {
+            return sl;
+        }
+
+        std::string source;
+        utils::SourceLocation sl;
     };
 
-    std::deque<Token> tokens;
-    while (true) {
-        auto ret = nextToken();
-        if (ret.has_value()) {
-            tokens.push_back(ret.value());
-        } else {
-            break;
+    struct Token {
+        Token(utils::SourceLocation s, std::string t) : sl(s), text(std::move(t)) {}
+
+        utils::SourceLocation sl;
+        // for string literals, use the original (quoted) versions in the source stream
+        std::string text;
+    };
+
+    std::deque<Token> lex(std::string source) {
+        SourceStream ss(std::move(source));
+
+        std::function<std::optional<Token>()> nextToken =
+            [&ss, &nextToken]() -> std::optional<Token> {
+            // skip whitespaces
+            while (ss.hasNext() && std::isspace(ss.peekNext())) {
+                ss.popNext();
+            }
+            if (!ss.hasNext()) {
+                return std::nullopt;
+            }
+            // read the next token
+            auto startsl = ss.getNextSourceLocation();
+            std::string text = "";
+            // integer literal
+            if (std::isdigit(ss.peekNext()) || ss.peekNext() == '-' || ss.peekNext() == '+') {
+                if (ss.peekNext() == '-' || ss.peekNext() == '+') {
+                    text += ss.popNext();
+                }
+                bool hasDigit = false;
+                while (ss.hasNext() && std::isdigit(ss.peekNext())) {
+                    hasDigit = true;
+                    text += ss.popNext();
+                }
+                if (!hasDigit) {
+                    utils::panic("lexer", "incomplete integer literal", startsl);
+                }
+                // string literal
+            }
+            else if (ss.peekNext() == '"') {
+                text += ss.popNext();
+                bool complete = false;
+                bool escape = false;
+                while (ss.hasNext()) {
+                    if ((!escape) && ss.peekNext() == '"') {
+                        text += ss.popNext();
+                        complete = true;
+                        break;
+                    }
+                    else {
+                        char c = ss.popNext();
+                        if (c == '\\') {
+                            escape = true;
+                        }
+                        else {
+                            escape = false;
+                        }
+                        text += c;
+                    }
+                }
+                if (!complete) {
+                    utils::panic("lexer", "incomplete string literal", startsl);
+                }
+                // variable / keyword
+            }
+            else if (std::isalpha(ss.peekNext()) || ss.peekNext() == '_') {
+                while (
+                    ss.hasNext() && (
+                        std::isalpha(ss.peekNext()) ||
+                        std::isdigit(ss.peekNext()) ||
+                        ss.peekNext() == '_'
+                        )
+                    ) {
+                    text += ss.popNext();
+                }
+                // intrinsic
+            }
+            else if (ss.peekNext() == '.') {
+                while (ss.hasNext() && !(std::isspace(ss.peekNext()) || ss.peekNext() == ')')) {
+                    text += ss.popNext();
+                }
+                // special symbol
+            }
+            else if (std::string("(){}@").find(ss.peekNext()) != std::string::npos) {
+                text += ss.popNext();
+                // comment
+            }
+            else if (ss.peekNext() == '#') {
+                while (ss.hasNext() && ss.peekNext() != '\n') {
+                    ss.popNext();
+                }
+                // nextToken() will consume the \n and recursively continue
+                return nextToken();
+            }
+            else {
+                utils::panic("lexer", "unsupported starting character", startsl);
+            }
+            return Token(startsl, std::move(text));
+            };
+
+        std::deque<Token> tokens;
+        while (true) {
+            auto ret = nextToken();
+            if (ret.has_value()) {
+                tokens.push_back(ret.value());
+            }
+            else {
+                break;
+            }
         }
+        return tokens;
     }
-    return tokens;
-}
 
-// ------------------------------
-// AST, parser, and static analysis
-// ------------------------------
+    // ------------------------------
+    // AST, parser, and static analysis
+    // ------------------------------
 
-enum class TraversalMode {
-    TOP_DOWN,
-    BOTTOM_UP
-};
+    enum class TraversalMode {
+        TOP_DOWN,
+        BOTTOM_UP
+    };
 
-// this also prevents implicitly-declared move constructors and move assignment operators
-// use clone() to copy the entire tree
+    // this also prevents implicitly-declared move constructors and move assignment operators
+    // use clone() to copy the entire tree
 #define DELETE_COPY(CLASS) \
     CLASS(const CLASS &) = delete; \
     CLASS &operator=(const CLASS &) = delete
 
-struct ExprNode {
-    DELETE_COPY(ExprNode);
-    virtual ~ExprNode() {}
-    ExprNode(utils::SourceLocation s): sl(s) {}
+    struct ExprNode {
+        DELETE_COPY(ExprNode);
+        virtual ~ExprNode() {}
+        ExprNode(utils::SourceLocation s) : sl(s) {}
 
-    virtual ExprNode *clone() const = 0;
-    virtual void traverse(
-        TraversalMode mode,
-        // callback may have states
-        std::function<void(ExprNode*)> &callback
-    ) = 0;
-    virtual std::string toString() const = 0;
-    virtual void computeFreeVars() = 0;
-    virtual void computeTail(bool parentTail) = 0;
+        virtual ExprNode* clone() const = 0;
+        virtual void traverse(
+            TraversalMode mode,
+            // callback may have states
+            std::function<void(ExprNode*)>& callback
+        ) = 0;
+        virtual std::string toString() const = 0;
+        virtual void computeFreeVars() = 0;
+        virtual void computeTail(bool parentTail) = 0;
 
-    utils::SourceLocation sl;
-    // static information for free variables in the expression
-    std::unordered_set<std::string> freeVars;
-    // static information for tail position in the parent expression
-    bool tail = false;
-};
+        utils::SourceLocation sl;
+        // static information for free variables in the expression
+        std::unordered_set<std::string> freeVars;
+        // static information for tail position in the parent expression
+        bool tail = false;
+    };
 
-// every value is accessed by reference to its location on the heap 
-using Location = int;
+    // every value is accessed by reference to its location on the heap 
+    using Location = int;
 
-// AST nodes store original tokens (string for IntegerNode)
-struct IntegerNode : public ExprNode {
-    DELETE_COPY(IntegerNode);
-    virtual ~IntegerNode() {}
-    IntegerNode(utils::SourceLocation s, std::string v): ExprNode(s), val(std::move(v)) {}
+    // AST nodes store original tokens (string for IntegerNode)
+    struct IntegerNode : public ExprNode {
+        DELETE_COPY(IntegerNode);
+        virtual ~IntegerNode() {}
+        IntegerNode(utils::SourceLocation s, std::string v) : ExprNode(s), val(std::move(v)) {}
 
-    // covariant return type for override
-    virtual IntegerNode *clone() const override {
-        auto inode = new IntegerNode(sl, val);
-        inode->freeVars = freeVars;
-        inode->tail = tail;
-        return inode;
-    }
-    virtual void traverse(
-        TraversalMode,
-        std::function<void(ExprNode*)> &callback
-    ) override {
-        callback(this);
-    }
-    virtual std::string toString() const override {
-        return val;
-    }
-    virtual void computeFreeVars() override {
-    }
-    virtual void computeTail(bool parentTail) override {
-        tail = parentTail;
-    }
-
-    std::string val;
-    // location on the heap: statically pre-computed
-    Location loc = -1;
-};
-
-// AST nodes store original tokens (quoted string for StringNode)
-struct StringNode : public ExprNode {
-    DELETE_COPY(StringNode);
-    virtual ~StringNode() {}
-    StringNode(utils::SourceLocation s, std::string v): ExprNode(s), val(std::move(v)) {}
-
-    // covariant return type
-    virtual StringNode *clone() const override {
-        auto snode = new StringNode(sl, val);
-        snode->freeVars = freeVars;
-        snode->tail = tail;
-        return snode;
-    }
-    virtual void traverse(
-        TraversalMode,
-        std::function<void(ExprNode*)> &callback
-    ) override {
-        callback(this);
-    }
-    virtual std::string toString() const override {
-        return val;
-    }
-    virtual void computeFreeVars() override {
-    }
-    virtual void computeTail(bool parentTail) override {
-        tail = parentTail;
-    }
-
-    std::string val;
-    // location on the heap: statically pre-computed
-    Location loc = -1;
-};
-
-struct VariableNode : public ExprNode {
-    DELETE_COPY(VariableNode);
-    virtual ~VariableNode() {}
-    VariableNode(utils::SourceLocation s, std::string n): ExprNode(s), name(std::move(n)) {}
-
-    virtual VariableNode *clone() const override {
-        auto vnode = new VariableNode(sl, name);
-        vnode->freeVars = freeVars;
-        vnode->tail = tail;
-        return vnode;
-    }
-    virtual void traverse(
-        TraversalMode,
-        std::function<void(ExprNode*)> &callback
-    ) override {
-        callback(this);
-    }
-    virtual std::string toString() const override {
-        return name;
-    }
-    virtual void computeFreeVars() override {
-        freeVars.insert(name);
-    }
-    virtual void computeTail(bool parentTail) override {
-        tail = parentTail;
-    }
-
-    std::string name;
-};
-
-struct LambdaNode : public ExprNode {
-    DELETE_COPY(LambdaNode);
-    virtual ~LambdaNode() {
-        for (auto v : varList) {
-            delete v;
+        // covariant return type for override
+        virtual IntegerNode* clone() const override {
+            auto inode = new IntegerNode(sl, val);
+            inode->freeVars = freeVars;
+            inode->tail = tail;
+            return inode;
         }
-        delete expr;
-    }
-    LambdaNode(utils::SourceLocation s, std::vector<VariableNode*> v, ExprNode *e):
-        ExprNode(s), varList(std::move(v)), expr(e) {}
-
-    virtual LambdaNode *clone() const override {
-        std::vector<VariableNode*> newVarList;
-        for (auto v : varList) {
-            newVarList.push_back(v->clone());
-        }
-        ExprNode *newExpr = expr->clone();
-        auto lnode = new LambdaNode(sl, std::move(newVarList), newExpr);
-        lnode->freeVars = freeVars;
-        lnode->tail = tail;
-        return lnode;
-    }
-    virtual void traverse(
-        TraversalMode mode,
-        std::function<void(ExprNode*)> &callback
-    ) override {
-        if (mode == TraversalMode::TOP_DOWN) {
-            callback(this);
-            _traverseSubtree(mode, callback);
-        } else {
-            _traverseSubtree(mode, callback);
+        virtual void traverse(
+            TraversalMode,
+            std::function<void(ExprNode*)>& callback
+        ) override {
             callback(this);
         }
-    }
-    virtual std::string toString() const override {
-        std::string ret = "lambda (";
-        for (auto v : varList) {
-            ret += v->toString();
-            ret += " ";
+        virtual std::string toString() const override {
+            return val;
         }
-        if (ret.back() == ' ') {
-            ret.pop_back();
+        virtual void computeFreeVars() override {
         }
-        ret += ") ";
-        ret += expr->toString();
-        return ret;
-    }
-    virtual void computeFreeVars() override {
-        expr->computeFreeVars();
-        freeVars.insert(expr->freeVars.begin(), expr->freeVars.end());
-        for (auto var : varList) {
-            freeVars.erase(var->name);
+        virtual void computeTail(bool parentTail) override {
+            tail = parentTail;
         }
-    }
-    virtual void computeTail(bool parentTail) override {
-        tail = parentTail;
-        for (auto var : varList) {
-            var->computeTail(false);
-        }
-        expr->computeTail(true);
-    }
 
-    std::vector<VariableNode*> varList;
-    ExprNode *expr;
-private:
-    void _traverseSubtree(TraversalMode mode, std::function<void(ExprNode*)> &callback) {
-        for (auto var : varList) {
-            var->traverse(mode, callback);
-        }
-        expr->traverse(mode, callback);
-    }
-};
+        std::string val;
+        // location on the heap: statically pre-computed
+        Location loc = -1;
+    };
 
-struct LetrecNode : public ExprNode {
-    DELETE_COPY(LetrecNode);
-    virtual ~LetrecNode() {
-        for (auto &ve : varExprList) {
-            delete ve.first;
-            delete ve.second;
-        }
-        delete expr;
-    }
-    LetrecNode(utils::SourceLocation s, std::vector<std::pair<VariableNode*, ExprNode*>> v, ExprNode *e):
-        ExprNode(s), varExprList(std::move(v)), expr(e) {}
+    // AST nodes store original tokens (quoted string for StringNode)
+    struct StringNode : public ExprNode {
+        DELETE_COPY(StringNode);
+        virtual ~StringNode() {}
+        StringNode(utils::SourceLocation s, std::string v) : ExprNode(s), val(std::move(v)) {}
 
-    virtual LetrecNode *clone() const override {
-        std::vector<std::pair<VariableNode*, ExprNode*>> newVarExprList;
-        for (const auto &ve : varExprList) {
+        // covariant return type
+        virtual StringNode* clone() const override {
+            auto snode = new StringNode(sl, val);
+            snode->freeVars = freeVars;
+            snode->tail = tail;
+            return snode;
+        }
+        virtual void traverse(
+            TraversalMode,
+            std::function<void(ExprNode*)>& callback
+        ) override {
+            callback(this);
+        }
+        virtual std::string toString() const override {
+            return val;
+        }
+        virtual void computeFreeVars() override {
+        }
+        virtual void computeTail(bool parentTail) override {
+            tail = parentTail;
+        }
+
+        std::string val;
+        // location on the heap: statically pre-computed
+        Location loc = -1;
+    };
+
+    struct VariableNode : public ExprNode {
+        DELETE_COPY(VariableNode);
+        virtual ~VariableNode() {}
+        VariableNode(utils::SourceLocation s, std::string n) : ExprNode(s), name(std::move(n)) {}
+
+        virtual VariableNode* clone() const override {
+            auto vnode = new VariableNode(sl, name);
+            vnode->freeVars = freeVars;
+            vnode->tail = tail;
+            return vnode;
+        }
+        virtual void traverse(
+            TraversalMode,
+            std::function<void(ExprNode*)>& callback
+        ) override {
+            callback(this);
+        }
+        virtual std::string toString() const override {
+            return name;
+        }
+        virtual void computeFreeVars() override {
+            freeVars.insert(name);
+        }
+        virtual void computeTail(bool parentTail) override {
+            tail = parentTail;
+        }
+
+        std::string name;
+    };
+
+    struct LambdaNode : public ExprNode {
+        DELETE_COPY(LambdaNode);
+        virtual ~LambdaNode() {
+            for (auto v : varList) {
+                delete v;
+            }
+            delete expr;
+        }
+        LambdaNode(utils::SourceLocation s, std::vector<VariableNode*> v, ExprNode* e) :
+            ExprNode(s), varList(std::move(v)), expr(e) {
+        }
+
+        virtual LambdaNode* clone() const override {
+            std::vector<VariableNode*> newVarList;
+            for (auto v : varList) {
+                newVarList.push_back(v->clone());
+            }
+            ExprNode* newExpr = expr->clone();
+            auto lnode = new LambdaNode(sl, std::move(newVarList), newExpr);
+            lnode->freeVars = freeVars;
+            lnode->tail = tail;
+            return lnode;
+        }
+        virtual void traverse(
+            TraversalMode mode,
+            std::function<void(ExprNode*)>& callback
+        ) override {
+            if (mode == TraversalMode::TOP_DOWN) {
+                callback(this);
+                _traverseSubtree(mode, callback);
+            }
+            else {
+                _traverseSubtree(mode, callback);
+                callback(this);
+            }
+        }
+        virtual std::string toString() const override {
+            std::string ret = "lambda (";
+            for (auto v : varList) {
+                ret += v->toString();
+                ret += " ";
+            }
+            if (ret.back() == ' ') {
+                ret.pop_back();
+            }
+            ret += ") ";
+            ret += expr->toString();
+            return ret;
+        }
+        virtual void computeFreeVars() override {
+            expr->computeFreeVars();
+            freeVars.insert(expr->freeVars.begin(), expr->freeVars.end());
+            for (auto var : varList) {
+                freeVars.erase(var->name);
+            }
+        }
+        virtual void computeTail(bool parentTail) override {
+            tail = parentTail;
+            for (auto var : varList) {
+                var->computeTail(false);
+            }
+            expr->computeTail(true);
+        }
+
+        std::vector<VariableNode*> varList;
+        ExprNode* expr;
+    private:
+        void _traverseSubtree(TraversalMode mode, std::function<void(ExprNode*)>& callback) {
+            for (auto var : varList) {
+                var->traverse(mode, callback);
+            }
+            expr->traverse(mode, callback);
+        }
+    };
+
+    struct LetrecNode : public ExprNode {
+        DELETE_COPY(LetrecNode);
+        virtual ~LetrecNode() {
+            for (auto& ve : varExprList) {
+                delete ve.first;
+                delete ve.second;
+            }
+            delete expr;
+        }
+        LetrecNode(utils::SourceLocation s, std::vector<std::pair<VariableNode*, ExprNode*>> v, ExprNode* e) :
+            ExprNode(s), varExprList(std::move(v)), expr(e) {
+        }
+
+        virtual LetrecNode* clone() const override {
+            std::vector<std::pair<VariableNode*, ExprNode*>> newVarExprList;
+            for (const auto& ve : varExprList) {
+                // the evaluation order of the two clones are irrelevant
+                newVarExprList.push_back(std::make_pair(ve.first->clone(), ve.second->clone()));
+            }
+            ExprNode* newExpr = expr->clone();
+            auto lnode = new LetrecNode(sl, std::move(newVarExprList), newExpr);
+            lnode->freeVars = freeVars;
+            lnode->tail = tail;
+            return lnode;
+        }
+        virtual void traverse(
+            TraversalMode mode,
+            std::function<void(ExprNode*)>& callback
+        ) override {
+            if (mode == TraversalMode::TOP_DOWN) {
+                callback(this);
+                _traverseSubtree(mode, callback);
+            }
+            else {
+                _traverseSubtree(mode, callback);
+                callback(this);
+            }
+        }
+        virtual std::string toString() const override {
+            std::string ret = "letrec (";
+            for (const auto& ve : varExprList) {
+                ret += ve.first->toString();
+                ret += " ";
+                ret += ve.second->toString();
+                ret += " ";
+            }
+            if (ret.back() == ' ') {
+                ret.pop_back();
+            }
+            ret += ") ";
+            ret += expr->toString();
+            return ret;
+        }
+        virtual void computeFreeVars() override {
+            expr->computeFreeVars();
+            freeVars.insert(expr->freeVars.begin(), expr->freeVars.end());
+            for (auto& ve : varExprList) {
+                ve.second->computeFreeVars();
+                freeVars.insert(ve.second->freeVars.begin(), ve.second->freeVars.end());
+            }
+            for (auto& ve : varExprList) {
+                freeVars.erase(ve.first->name);
+            }
+        }
+        virtual void computeTail(bool parentTail) override {
+            tail = parentTail;
+            for (auto& ve : varExprList) {
+                ve.first->computeTail(false);
+                ve.second->computeTail(false);
+            }
+            expr->computeTail(tail);
+        }
+
+        std::vector<std::pair<VariableNode*, ExprNode*>> varExprList;
+        ExprNode* expr;
+    private:
+        void _traverseSubtree(TraversalMode mode, std::function<void(ExprNode*)>& callback) {
+            for (auto& ve : varExprList) {
+                ve.first->traverse(mode, callback);
+                ve.second->traverse(mode, callback);
+            }
+            expr->traverse(mode, callback);
+        }
+    };
+
+    struct IfNode : public ExprNode {
+        DELETE_COPY(IfNode);
+        virtual ~IfNode() {
+            delete cond;
+            delete branch1;
+            delete branch2;
+        }
+        IfNode(utils::SourceLocation s, ExprNode* c, ExprNode* b1, ExprNode* b2) :
+            ExprNode(s), cond(c), branch1(b1), branch2(b2) {
+        }
+
+        virtual IfNode* clone() const override {
+            // the evaluation order of the three clones are irrelevant
+            auto inode = new IfNode(sl, cond->clone(), branch1->clone(), branch2->clone());
+            inode->freeVars = freeVars;
+            inode->tail = tail;
+            return inode;
+        }
+        virtual void traverse(
+            TraversalMode mode,
+            std::function<void(ExprNode*)>& callback
+        ) override {
+            if (mode == TraversalMode::TOP_DOWN) {
+                callback(this);
+                _traverseSubtree(mode, callback);
+            }
+            else {
+                _traverseSubtree(mode, callback);
+                callback(this);
+            }
+        }
+        virtual std::string toString() const override {
+            return "if " + cond->toString() + " " + branch1->toString() + " " + branch2->toString();
+        }
+        virtual void computeFreeVars() override {
+            cond->computeFreeVars();
+            freeVars.insert(cond->freeVars.begin(), cond->freeVars.end());
+            branch1->computeFreeVars();
+            freeVars.insert(branch1->freeVars.begin(), branch1->freeVars.end());
+            branch2->computeFreeVars();
+            freeVars.insert(branch2->freeVars.begin(), branch2->freeVars.end());
+        }
+        virtual void computeTail(bool parentTail) override {
+            tail = parentTail;
+            cond->computeTail(false);
+            branch1->computeTail(tail);
+            branch2->computeTail(tail);
+        }
+
+        ExprNode* cond;
+        ExprNode* branch1;
+        ExprNode* branch2;
+    private:
+        void _traverseSubtree(TraversalMode mode, std::function<void(ExprNode*)>& callback) {
+            cond->traverse(mode, callback);
+            branch1->traverse(mode, callback);
+            branch2->traverse(mode, callback);
+        }
+    };
+
+    struct SequenceNode : public ExprNode {
+        DELETE_COPY(SequenceNode);
+        virtual ~SequenceNode() {
+            for (auto e : exprList) {
+                delete e;
+            }
+        }
+        SequenceNode(utils::SourceLocation s, std::vector<ExprNode*> e) :
+            ExprNode(s), exprList(std::move(e)) {
+        }
+
+        virtual SequenceNode* clone() const override {
+            std::vector<ExprNode*> newExprList;
+            for (auto e : exprList) {
+                newExprList.push_back(e->clone());
+            }
+            auto snode = new SequenceNode(sl, std::move(newExprList));
+            snode->freeVars = freeVars;
+            snode->tail = tail;
+            return snode;
+        }
+        virtual void traverse(
+            TraversalMode mode,
+            std::function<void(ExprNode*)>& callback
+        ) override {
+            if (mode == TraversalMode::TOP_DOWN) {
+                callback(this);
+                _traverseSubtree(mode, callback);
+            }
+            else {
+                _traverseSubtree(mode, callback);
+                callback(this);
+            }
+        }
+        virtual std::string toString() const override {
+            std::string ret = "{";
+            for (auto e : exprList) {
+                ret += e->toString();
+                ret += " ";
+            }
+            if (ret.back() == ' ') {
+                ret.pop_back();
+            }
+            ret += "}";
+            return ret;
+        }
+        virtual void computeFreeVars() override {
+            for (auto e : exprList) {
+                e->computeFreeVars();
+                freeVars.insert(e->freeVars.begin(), e->freeVars.end());
+            }
+        }
+        virtual void computeTail(bool parentTail) override {
+            tail = parentTail;
+            int n = exprList.size();
+            for (int i = 0; i < n - 1; i++) {
+                exprList[i]->computeTail(false);
+            }
+            exprList[n - 1]->computeTail(tail);
+        }
+
+        std::vector<ExprNode*> exprList;
+    private:
+        void _traverseSubtree(TraversalMode mode, std::function<void(ExprNode*)>& callback) {
+            for (auto e : exprList) {
+                e->traverse(mode, callback);
+            }
+        }
+    };
+
+    struct IntrinsicCallNode : public ExprNode {
+        DELETE_COPY(IntrinsicCallNode);
+        virtual ~IntrinsicCallNode() {
+            for (auto a : argList) {
+                delete a;
+            }
+        }
+        IntrinsicCallNode(utils::SourceLocation s, std::string i, std::vector<ExprNode*> a) :
+            ExprNode(s), intrinsic(std::move(i)), argList(std::move(a)) {
+        }
+
+        virtual IntrinsicCallNode* clone() const override {
+            std::vector<ExprNode*> newArgList;
+            for (auto a : argList) {
+                newArgList.push_back(a->clone());
+            }
+            auto inode = new IntrinsicCallNode(sl, intrinsic, std::move(newArgList));
+            inode->freeVars = freeVars;
+            inode->tail = tail;
+            return inode;
+        }
+        virtual void traverse(
+            TraversalMode mode,
+            std::function<void(ExprNode*)>& callback
+        ) override {
+            if (mode == TraversalMode::TOP_DOWN) {
+                callback(this);
+                _traverseSubtree(mode, callback);
+            }
+            else {
+                _traverseSubtree(mode, callback);
+                callback(this);
+            }
+        }
+        virtual std::string toString() const override {
+            std::string ret = "(" + intrinsic;
+            for (auto a : argList) {
+                ret += " ";
+                ret += a->toString();
+            }
+            ret += ")";
+            return ret;
+        }
+        virtual void computeFreeVars() override {
+            for (auto a : argList) {
+                a->computeFreeVars();
+                freeVars.insert(a->freeVars.begin(), a->freeVars.end());
+            }
+        }
+        virtual void computeTail(bool parentTail) override {
+            tail = parentTail;
+            for (auto a : argList) {
+                a->computeTail(false);
+            }
+        }
+
+        std::string intrinsic;
+        std::vector<ExprNode*> argList;
+    private:
+        void _traverseSubtree(TraversalMode mode, std::function<void(ExprNode*)>& callback) {
+            for (auto a : argList) {
+                a->traverse(mode, callback);
+            }
+        }
+    };
+
+    struct ExprCallNode : public ExprNode {
+        DELETE_COPY(ExprCallNode);
+        virtual ~ExprCallNode() {
+            delete expr;
+            for (auto a : argList) {
+                delete a;
+            }
+        }
+        ExprCallNode(utils::SourceLocation s, ExprNode* e, std::vector<ExprNode*> a) :
+            ExprNode(s), expr(e), argList(std::move(a)) {
+        }
+
+        virtual ExprCallNode* clone() const override {
+            ExprNode* newExpr = expr->clone();
+            std::vector<ExprNode*> newArgList;
+            for (auto a : argList) {
+                newArgList.push_back(a->clone());
+            }
+            auto enode = new ExprCallNode(sl, newExpr, std::move(newArgList));
+            enode->freeVars = freeVars;
+            enode->tail = tail;
+            return enode;
+        }
+        virtual void traverse(
+            TraversalMode mode,
+            std::function<void(ExprNode*)>& callback
+        ) override {
+            if (mode == TraversalMode::TOP_DOWN) {
+                callback(this);
+                _traverseSubtree(mode, callback);
+            }
+            else {
+                _traverseSubtree(mode, callback);
+                callback(this);
+            }
+        }
+        virtual std::string toString() const override {
+            std::string ret = "(" + expr->toString();
+            for (auto a : argList) {
+                ret += " ";
+                ret += a->toString();
+            }
+            ret += ")";
+            return ret;
+        }
+        virtual void computeFreeVars() override {
+            expr->computeFreeVars();
+            freeVars.insert(expr->freeVars.begin(), expr->freeVars.end());
+            for (auto a : argList) {
+                a->computeFreeVars();
+                freeVars.insert(a->freeVars.begin(), a->freeVars.end());
+            }
+        }
+        virtual void computeTail(bool parentTail) override {
+            tail = parentTail;
+            expr->computeTail(false);
+            for (auto a : argList) {
+                a->computeTail(false);
+            }
+        }
+
+        ExprNode* expr;
+        std::vector<ExprNode*> argList;
+    private:
+        void _traverseSubtree(TraversalMode mode, std::function<void(ExprNode*)>& callback) {
+            expr->traverse(mode, callback);
+            for (auto a : argList) {
+                a->traverse(mode, callback);
+            }
+        }
+    };
+
+    struct AtNode : public ExprNode {
+        DELETE_COPY(AtNode);
+        virtual ~AtNode() {
+            delete var;
+            delete expr;
+        }
+        AtNode(utils::SourceLocation s, VariableNode* v, ExprNode* e) : ExprNode(s), var(v), expr(e) {}
+
+        virtual AtNode* clone() const override {
             // the evaluation order of the two clones are irrelevant
-            newVarExprList.push_back(std::make_pair(ve.first->clone(), ve.second->clone()));
+            auto anode = new AtNode(sl, var->clone(), expr->clone());
+            anode->freeVars = freeVars;
+            anode->tail = tail;
+            return anode;
         }
-        ExprNode *newExpr = expr->clone();
-        auto lnode = new LetrecNode(sl, std::move(newVarExprList), newExpr);
-        lnode->freeVars = freeVars;
-        lnode->tail = tail;
-        return lnode;
-    }
-    virtual void traverse(
-        TraversalMode mode,
-        std::function<void(ExprNode*)> &callback
-    ) override {
-        if (mode == TraversalMode::TOP_DOWN) {
-            callback(this);
-            _traverseSubtree(mode, callback);
-        } else {
-            _traverseSubtree(mode, callback);
-            callback(this);
+        virtual void traverse(
+            TraversalMode mode,
+            std::function<void(ExprNode*)>& callback
+        ) override {
+            if (mode == TraversalMode::TOP_DOWN) {
+                callback(this);
+                _traverseSubtree(mode, callback);
+            }
+            else {
+                _traverseSubtree(mode, callback);
+                callback(this);
+            }
         }
-    }
-    virtual std::string toString() const override {
-        std::string ret = "letrec (";
-        for (const auto &ve : varExprList) {
-            ret += ve.first->toString();
-            ret += " ";
-            ret += ve.second->toString();
-            ret += " ";
+        virtual std::string toString() const override {
+            return "@ " + var->toString() + " " + expr->toString();
         }
-        if (ret.back() == ' ') {
-            ret.pop_back();
+        virtual void computeFreeVars() override {
+            expr->computeFreeVars();
+            freeVars.insert(expr->freeVars.begin(), expr->freeVars.end());
         }
-        ret += ") ";
-        ret += expr->toString();
-        return ret;
-    }
-    virtual void computeFreeVars() override {
-        expr->computeFreeVars();
-        freeVars.insert(expr->freeVars.begin(), expr->freeVars.end());
-        for (auto &ve : varExprList) {
-            ve.second->computeFreeVars();
-            freeVars.insert(ve.second->freeVars.begin(), ve.second->freeVars.end());
+        virtual void computeTail(bool parentTail) override {
+            tail = parentTail;
+            var->computeTail(false);
+            expr->computeTail(false);
         }
-        for (auto &ve : varExprList) {
-            freeVars.erase(ve.first->name);
-        }
-    }
-    virtual void computeTail(bool parentTail) override {
-        tail = parentTail;
-        for (auto &ve : varExprList) {
-            ve.first->computeTail(false);
-            ve.second->computeTail(false);
-        }
-        expr->computeTail(tail);
-    }
-    
-    std::vector<std::pair<VariableNode*, ExprNode*>> varExprList;
-    ExprNode *expr;
-private:
-    void _traverseSubtree(TraversalMode mode, std::function<void(ExprNode*)> &callback) {
-        for (auto &ve : varExprList) {
-            ve.first->traverse(mode, callback);
-            ve.second->traverse(mode, callback);
-        }
-        expr->traverse(mode, callback);
-    }
-};
 
-struct IfNode : public ExprNode {
-    DELETE_COPY(IfNode);
-    virtual ~IfNode() {
-        delete cond;
-        delete branch1;
-        delete branch2;
-    }
-    IfNode(utils::SourceLocation s, ExprNode *c, ExprNode *b1, ExprNode *b2):
-        ExprNode(s), cond(c), branch1(b1), branch2(b2) {}
-
-    virtual IfNode *clone() const override {
-        // the evaluation order of the three clones are irrelevant
-        auto inode = new IfNode(sl, cond->clone(), branch1->clone(), branch2->clone());
-        inode->freeVars = freeVars;
-        inode->tail = tail;
-        return inode;
-    }
-    virtual void traverse(
-        TraversalMode mode,
-        std::function<void(ExprNode*)> &callback
-    ) override {
-        if (mode == TraversalMode::TOP_DOWN) {
-            callback(this);
-            _traverseSubtree(mode, callback);
-        } else {
-            _traverseSubtree(mode, callback);
-            callback(this);
+        VariableNode* var;
+        ExprNode* expr;
+    private:
+        void _traverseSubtree(TraversalMode mode, std::function<void(ExprNode*)>& callback) {
+            var->traverse(mode, callback);
+            expr->traverse(mode, callback);
         }
-    }
-    virtual std::string toString() const override {
-        return "if " + cond->toString() + " " + branch1->toString() + " " + branch2->toString();
-    }
-    virtual void computeFreeVars() override {
-        cond->computeFreeVars();
-        freeVars.insert(cond->freeVars.begin(), cond->freeVars.end());
-        branch1->computeFreeVars();
-        freeVars.insert(branch1->freeVars.begin(), branch1->freeVars.end());
-        branch2->computeFreeVars();
-        freeVars.insert(branch2->freeVars.begin(), branch2->freeVars.end());
-    }
-    virtual void computeTail(bool parentTail) override {
-        tail = parentTail;
-        cond->computeTail(false);
-        branch1->computeTail(tail);
-        branch2->computeTail(tail);
-    }
-
-    ExprNode *cond;
-    ExprNode *branch1;
-    ExprNode *branch2;
-private:
-    void _traverseSubtree(TraversalMode mode, std::function<void(ExprNode*)> &callback) {
-        cond->traverse(mode, callback);
-        branch1->traverse(mode, callback);
-        branch2->traverse(mode, callback);
-    }
-};
-
-struct SequenceNode : public ExprNode {
-    DELETE_COPY(SequenceNode);
-    virtual ~SequenceNode() {
-        for (auto e : exprList) {
-            delete e;
-        }
-    }
-    SequenceNode(utils::SourceLocation s, std::vector<ExprNode*> e):
-        ExprNode(s), exprList(std::move(e)) {}
-
-    virtual SequenceNode *clone() const override {
-        std::vector<ExprNode*> newExprList;
-        for (auto e : exprList) {
-            newExprList.push_back(e->clone());
-        }
-        auto snode = new SequenceNode(sl, std::move(newExprList));
-        snode->freeVars = freeVars;
-        snode->tail = tail;
-        return snode;
-    }
-    virtual void traverse(
-        TraversalMode mode,
-        std::function<void(ExprNode*)> &callback
-    ) override {
-        if (mode == TraversalMode::TOP_DOWN) {
-            callback(this);
-            _traverseSubtree(mode, callback);
-        } else {
-            _traverseSubtree(mode, callback);
-            callback(this);
-        }
-    }
-    virtual std::string toString() const override {
-        std::string ret = "{";
-        for (auto e : exprList) {
-            ret += e->toString();
-            ret += " ";
-        }
-        if (ret.back() == ' ') {
-            ret.pop_back();
-        }
-        ret += "}";
-        return ret;
-    }
-    virtual void computeFreeVars() override {
-        for (auto e : exprList) {
-            e->computeFreeVars();
-            freeVars.insert(e->freeVars.begin(), e->freeVars.end());
-        }
-    }
-    virtual void computeTail(bool parentTail) override {
-        tail = parentTail;
-        int n = exprList.size();
-        for (int i = 0; i < n - 1; i++) {
-            exprList[i]->computeTail(false);
-        }
-        exprList[n - 1]->computeTail(tail);
-    }
-
-    std::vector<ExprNode*> exprList;
-private:
-    void _traverseSubtree(TraversalMode mode, std::function<void(ExprNode*)> &callback) {
-        for (auto e : exprList) {
-            e->traverse(mode, callback);
-        }
-    }
-};
-
-struct IntrinsicCallNode : public ExprNode {
-    DELETE_COPY(IntrinsicCallNode);
-    virtual ~IntrinsicCallNode() {
-        for (auto a : argList) {
-            delete a;
-        }
-    }
-    IntrinsicCallNode(utils::SourceLocation s, std::string i, std::vector<ExprNode*> a):
-        ExprNode(s), intrinsic(std::move(i)), argList(std::move(a)) {}
-
-    virtual IntrinsicCallNode *clone() const override {
-        std::vector<ExprNode*> newArgList;
-        for (auto a : argList) {
-            newArgList.push_back(a->clone());
-        }
-        auto inode = new IntrinsicCallNode(sl, intrinsic, std::move(newArgList));
-        inode->freeVars = freeVars;
-        inode->tail = tail;
-        return inode;
-    }
-    virtual void traverse(
-        TraversalMode mode,
-        std::function<void(ExprNode*)> &callback
-    ) override {
-        if (mode == TraversalMode::TOP_DOWN) {
-            callback(this);
-            _traverseSubtree(mode, callback);
-        } else {
-            _traverseSubtree(mode, callback);
-            callback(this);
-        }
-    }
-    virtual std::string toString() const override {
-        std::string ret = "(" + intrinsic;
-        for (auto a : argList) {
-            ret += " ";
-            ret += a->toString();
-        }
-        ret += ")";
-        return ret;
-    }
-    virtual void computeFreeVars() override {
-        for (auto a : argList) {
-            a->computeFreeVars();
-            freeVars.insert(a->freeVars.begin(), a->freeVars.end());
-        }
-    }
-    virtual void computeTail(bool parentTail) override {
-        tail = parentTail;
-        for (auto a : argList) {
-            a->computeTail(false);
-        }
-    }
-
-    std::string intrinsic;
-    std::vector<ExprNode*> argList;
-private:
-    void _traverseSubtree(TraversalMode mode, std::function<void(ExprNode*)> &callback) {
-        for (auto a : argList) {
-            a->traverse(mode, callback);
-        }
-    }
-};
-
-struct ExprCallNode : public ExprNode {
-    DELETE_COPY(ExprCallNode);
-    virtual ~ExprCallNode() {
-        delete expr;
-        for (auto a : argList) {
-            delete a;
-        }
-    }
-    ExprCallNode(utils::SourceLocation s, ExprNode *e, std::vector<ExprNode*> a):
-        ExprNode(s), expr(e), argList(std::move(a)) {}
-
-    virtual ExprCallNode *clone() const override {
-        ExprNode *newExpr = expr->clone();
-        std::vector<ExprNode*> newArgList;
-        for (auto a : argList) {
-            newArgList.push_back(a->clone());
-        }
-        auto enode = new ExprCallNode(sl, newExpr, std::move(newArgList));
-        enode->freeVars = freeVars;
-        enode->tail = tail;
-        return enode;
-    }
-    virtual void traverse(
-        TraversalMode mode,
-        std::function<void(ExprNode*)> &callback
-    ) override {
-        if (mode == TraversalMode::TOP_DOWN) {
-            callback(this);
-            _traverseSubtree(mode, callback);
-        } else {
-            _traverseSubtree(mode, callback);
-            callback(this);
-        }
-    }
-    virtual std::string toString() const override {
-        std::string ret = "(" + expr->toString();
-        for (auto a : argList) {
-            ret += " ";
-            ret += a->toString();
-        }
-        ret += ")";
-        return ret;
-    }
-    virtual void computeFreeVars() override {
-        expr->computeFreeVars();
-        freeVars.insert(expr->freeVars.begin(), expr->freeVars.end());
-        for (auto a : argList) {
-            a->computeFreeVars();
-            freeVars.insert(a->freeVars.begin(), a->freeVars.end());
-        }
-    }
-    virtual void computeTail(bool parentTail) override {
-        tail = parentTail;
-        expr->computeTail(false);
-        for (auto a : argList) {
-            a->computeTail(false);
-        }
-    }
-
-    ExprNode *expr;
-    std::vector<ExprNode*> argList;
-private:
-    void _traverseSubtree(TraversalMode mode, std::function<void(ExprNode*)> &callback) {
-        expr->traverse(mode, callback);
-        for (auto a : argList) {
-            a->traverse(mode, callback);
-        }
-    }
-};
-
-struct AtNode : public ExprNode {
-    DELETE_COPY(AtNode);
-    virtual ~AtNode() {
-        delete var;
-        delete expr;
-    }
-    AtNode(utils::SourceLocation s, VariableNode *v, ExprNode *e): ExprNode(s), var(v), expr(e) {}
-
-    virtual AtNode *clone() const override {
-        // the evaluation order of the two clones are irrelevant
-        auto anode = new AtNode(sl, var->clone(), expr->clone());
-        anode->freeVars = freeVars;
-        anode->tail = tail;
-        return anode;
-    }
-    virtual void traverse(
-        TraversalMode mode,
-        std::function<void(ExprNode*)> &callback
-    ) override {
-        if (mode == TraversalMode::TOP_DOWN) {
-            callback(this);
-            _traverseSubtree(mode, callback);
-        } else {
-            _traverseSubtree(mode, callback);
-            callback(this);
-        }
-    }
-    virtual std::string toString() const override {
-        return "@ " + var->toString() + " " + expr->toString();
-    }
-    virtual void computeFreeVars() override {
-        expr->computeFreeVars();
-        freeVars.insert(expr->freeVars.begin(), expr->freeVars.end());
-    }
-    virtual void computeTail(bool parentTail) override {
-        tail = parentTail;
-        var->computeTail(false);
-        expr->computeTail(false);
-    }
-
-    VariableNode *var;
-    ExprNode *expr;
-private:
-    void _traverseSubtree(TraversalMode mode, std::function<void(ExprNode*)> &callback) {
-        var->traverse(mode, callback);
-        expr->traverse(mode, callback);
-    }
-};
+    };
 
 #undef DELETE_COPY
 
-ExprNode *parse(std::deque<Token> tokens) {
-    auto isIntegerToken = [](const Token &token) {
-        return token.text.size() > 0 && (
-            std::isdigit(token.text[0]) ||
-            token.text[0] == '-' ||
-            token.text[0] == '+'
-        );
-    };
-    auto isStringToken = [](const Token &token) {
-        return token.text.size() > 0 && token.text[0] == '"';
-    };
-    auto isIntrinsicToken = [](const Token &token) {
-        return token.text.size() > 0 && token.text[0] == '.';
-    };
-    auto isVariableToken = [](const Token &token) {
-        return token.text.size() > 0 && (std::isalpha(token.text[0]) || token.text[0] == '_');
-    };
-    auto isTheToken = [](const std::string &s) {
-        return [s](const Token &token) {
-            return token.text == s;
+    ExprNode* parse(std::deque<Token> tokens) {
+        auto isIntegerToken = [](const Token& token) {
+            return token.text.size() > 0 && (
+                std::isdigit(token.text[0]) ||
+                token.text[0] == '-' ||
+                token.text[0] == '+'
+                );
+            };
+        auto isStringToken = [](const Token& token) {
+            return token.text.size() > 0 && token.text[0] == '"';
+            };
+        auto isIntrinsicToken = [](const Token& token) {
+            return token.text.size() > 0 && token.text[0] == '.';
+            };
+        auto isVariableToken = [](const Token& token) {
+            return token.text.size() > 0 && (std::isalpha(token.text[0]) || token.text[0] == '_');
+            };
+        auto isTheToken = [](const std::string& s) {
+            return [s](const Token& token) {
+                return token.text == s;
+                };
+            };
+        auto consume = [&tokens]<typename Callable>(const Callable & predicate) -> Token {
+            if (tokens.size() == 0) {
+                utils::panic("parser", "incomplete token stream");
+            }
+            auto token = tokens.front();
+            tokens.pop_front();
+            if (!predicate(token)) {
+                utils::panic("parser", "unexpected token", token.sl);
+            }
+            return token;
         };
-    };
-    auto consume = [&tokens]<typename Callable>(const Callable &predicate) -> Token {
-        if (tokens.size() == 0) {
-            utils::panic("parser", "incomplete token stream");
-        }
-        auto token = tokens.front();
-        tokens.pop_front();
-        if (!predicate(token)) {
-            utils::panic("parser", "unexpected token", token.sl);
-        }
-        return token;
-    };
 
-    std::function<IntegerNode*()> parseInteger;
-    std::function<StringNode*()> parseString;
-    std::function<VariableNode*()> parseVariable;
-    std::function<LambdaNode*()> parseLambda;
-    std::function<LetrecNode*()> parseLetrec;
-    std::function<IfNode*()> parseIf;
-    std::function<SequenceNode*()> parseSequence;
-    std::function<IntrinsicCallNode*()> parseIntrinsicCall;
-    std::function<ExprCallNode*()> parseExprCall;
-    std::function<AtNode*()> parseAt;
-    std::function<ExprNode*()> parseExpr;
+        std::function<IntegerNode* ()> parseInteger;
+        std::function<StringNode* ()> parseString;
+        std::function<VariableNode* ()> parseVariable;
+        std::function<LambdaNode* ()> parseLambda;
+        std::function<LetrecNode* ()> parseLetrec;
+        std::function<IfNode* ()> parseIf;
+        std::function<SequenceNode* ()> parseSequence;
+        std::function<IntrinsicCallNode* ()> parseIntrinsicCall;
+        std::function<ExprCallNode* ()> parseExprCall;
+        std::function<AtNode* ()> parseAt;
+        std::function<ExprNode* ()> parseExpr;
 
-    parseInteger = [&]() -> IntegerNode* {
-        auto token = consume(isIntegerToken);
-        return new IntegerNode(token.sl, token.text);
-    };
-    parseString = [&]() -> StringNode* {  // don't unquote here: AST keeps raw tokens
-        auto token = consume(isStringToken);
-        return new StringNode(token.sl, token.text);
-    };
-    parseVariable = [&]() -> VariableNode* {
-        auto token = consume(isVariableToken);
-        return new VariableNode(token.sl, std::move(token.text));
-    };
-    parseLambda = [&]() -> LambdaNode* {
-        auto start = consume(isTheToken("lambda"));
-        consume(isTheToken("("));
-        std::vector<VariableNode*> varList;
-        while (tokens.size() && isVariableToken(tokens[0])) {
-            varList.push_back(parseVariable());
-        }
-        consume(isTheToken(")"));
-        auto expr = parseExpr();
-        return new LambdaNode(start.sl, std::move(varList), expr);
-    };
-    parseLetrec = [&]() -> LetrecNode* {
-        auto start = consume(isTheToken("letrec"));
-        consume(isTheToken("("));
-        std::vector<std::pair<VariableNode*, ExprNode*>> varExprList;
-        while (tokens.size() && isVariableToken(tokens[0])) {
-            // enforce the evaluation order of v; e
-            auto v = parseVariable();
-            auto e = parseExpr();
-            varExprList.emplace_back(v, e);
-        }
-        consume(isTheToken(")"));
-        auto expr = parseExpr();
-        return new LetrecNode(start.sl, std::move(varExprList), expr);
-    };
-    parseIf = [&]() -> IfNode* {
-        auto start = consume(isTheToken("if"));
-        auto cond = parseExpr();
-        auto branch1 = parseExpr();
-        auto branch2 = parseExpr();
-        return new IfNode(start.sl, cond, branch1, branch2);
-    };
-    parseSequence = [&]() -> SequenceNode* {
-        auto start = consume(isTheToken("{"));
-        std::vector<ExprNode*> exprList;
-        while (tokens.size() && tokens[0].text != "}") {
-            exprList.push_back(parseExpr());
-        }
-        if (!exprList.size()) {
-            utils::panic("parser", "zero-length sequence", start.sl);
-        }
-        consume(isTheToken("}"));
-        return new SequenceNode(start.sl, std::move(exprList));
-    };
-    parseIntrinsicCall = [&]() -> IntrinsicCallNode* {
-        auto start = consume(isTheToken("("));
-        auto intrinsic = consume(isIntrinsicToken);
-        std::vector<ExprNode*> argList;
-        while (tokens.size() && tokens[0].text != ")") {
-            argList.push_back(parseExpr());
-        }
-        consume(isTheToken(")"));
-        return new IntrinsicCallNode(start.sl, std::move(intrinsic.text), std::move(argList));
-    };
-    parseExprCall = [&]() -> ExprCallNode* {
-        auto start = consume(isTheToken("("));
-        auto expr = parseExpr();
-        std::vector<ExprNode*> argList;
-        while (tokens.size() && tokens[0].text != ")") {
-            argList.push_back(parseExpr());
-        }
-        consume(isTheToken(")"));
-        return new ExprCallNode(start.sl, expr, std::move(argList));
-    };
-    parseAt = [&]() -> AtNode* {
-        auto start = consume(isTheToken("@"));
-        auto var = parseVariable();
-        auto expr = parseExpr();
-        return new AtNode(start.sl, var, expr);
-    };
-    parseExpr = [&]() -> ExprNode* {
-        if (!tokens.size()) {
-            utils::panic("parser", "incomplete token stream");
-            // unreachable
-            return nullptr;
-        } else if (isIntegerToken(tokens[0])) {
-            return parseInteger();
-        } else if (isStringToken(tokens[0])) {
-            return parseString();
-        } else if (tokens[0].text == "lambda") {
-            return parseLambda();
-        } else if (tokens[0].text == "letrec") {
-            return parseLetrec();
-        } else if (tokens[0].text == "if") {
-            return parseIf();
-        // check keywords before var to avoid recognizing keywords as vars
-        } else if (isVariableToken(tokens[0])) {
-            return parseVariable();
-        } else if (tokens[0].text == "{") {
-            return parseSequence();
-        } else if (tokens[0].text == "(") {
-            if (tokens.size() < 2) {
+        parseInteger = [&]() -> IntegerNode* {
+            auto token = consume(isIntegerToken);
+            return new IntegerNode(token.sl, token.text);
+            };
+        parseString = [&]() -> StringNode* {  // don't unquote here: AST keeps raw tokens
+            auto token = consume(isStringToken);
+            return new StringNode(token.sl, token.text);
+            };
+        parseVariable = [&]() -> VariableNode* {
+            auto token = consume(isVariableToken);
+            return new VariableNode(token.sl, std::move(token.text));
+            };
+        parseLambda = [&]() -> LambdaNode* {
+            auto start = consume(isTheToken("lambda"));
+            consume(isTheToken("("));
+            std::vector<VariableNode*> varList;
+            while (tokens.size() && isVariableToken(tokens[0])) {
+                varList.push_back(parseVariable());
+            }
+            consume(isTheToken(")"));
+            auto expr = parseExpr();
+            return new LambdaNode(start.sl, std::move(varList), expr);
+            };
+        parseLetrec = [&]() -> LetrecNode* {
+            auto start = consume(isTheToken("letrec"));
+            consume(isTheToken("("));
+            std::vector<std::pair<VariableNode*, ExprNode*>> varExprList;
+            while (tokens.size() && isVariableToken(tokens[0])) {
+                // enforce the evaluation order of v; e
+                auto v = parseVariable();
+                auto e = parseExpr();
+                varExprList.emplace_back(v, e);
+            }
+            consume(isTheToken(")"));
+            auto expr = parseExpr();
+            return new LetrecNode(start.sl, std::move(varExprList), expr);
+            };
+        parseIf = [&]() -> IfNode* {
+            auto start = consume(isTheToken("if"));
+            auto cond = parseExpr();
+            auto branch1 = parseExpr();
+            auto branch2 = parseExpr();
+            return new IfNode(start.sl, cond, branch1, branch2);
+            };
+        parseSequence = [&]() -> SequenceNode* {
+            auto start = consume(isTheToken("{"));
+            std::vector<ExprNode*> exprList;
+            while (tokens.size() && tokens[0].text != "}") {
+                exprList.push_back(parseExpr());
+            }
+            if (!exprList.size()) {
+                utils::panic("parser", "zero-length sequence", start.sl);
+            }
+            consume(isTheToken("}"));
+            return new SequenceNode(start.sl, std::move(exprList));
+            };
+        parseIntrinsicCall = [&]() -> IntrinsicCallNode* {
+            auto start = consume(isTheToken("("));
+            auto intrinsic = consume(isIntrinsicToken);
+            std::vector<ExprNode*> argList;
+            while (tokens.size() && tokens[0].text != ")") {
+                argList.push_back(parseExpr());
+            }
+            consume(isTheToken(")"));
+            return new IntrinsicCallNode(start.sl, std::move(intrinsic.text), std::move(argList));
+            };
+        parseExprCall = [&]() -> ExprCallNode* {
+            auto start = consume(isTheToken("("));
+            auto expr = parseExpr();
+            std::vector<ExprNode*> argList;
+            while (tokens.size() && tokens[0].text != ")") {
+                argList.push_back(parseExpr());
+            }
+            consume(isTheToken(")"));
+            return new ExprCallNode(start.sl, expr, std::move(argList));
+            };
+        parseAt = [&]() -> AtNode* {
+            auto start = consume(isTheToken("@"));
+            auto var = parseVariable();
+            auto expr = parseExpr();
+            return new AtNode(start.sl, var, expr);
+            };
+        parseExpr = [&]() -> ExprNode* {
+            if (!tokens.size()) {
                 utils::panic("parser", "incomplete token stream");
                 // unreachable
                 return nullptr;
             }
-            if (isIntrinsicToken(tokens[1])) {
-                return parseIntrinsicCall();
-            } else {
-                return parseExprCall();
+            else if (isIntegerToken(tokens[0])) {
+                return parseInteger();
             }
-        } else if (tokens[0].text == "@") {
-            return parseAt();
-        } else {
-            utils::panic("parser", "unrecognized token", tokens[0].sl);
-            // unreachable
-            return nullptr;
-        }
-    };
+            else if (isStringToken(tokens[0])) {
+                return parseString();
+            }
+            else if (tokens[0].text == "lambda") {
+                return parseLambda();
+            }
+            else if (tokens[0].text == "letrec") {
+                return parseLetrec();
+            }
+            else if (tokens[0].text == "if") {
+                return parseIf();
+                // check keywords before var to avoid recognizing keywords as vars
+            }
+            else if (isVariableToken(tokens[0])) {
+                return parseVariable();
+            }
+            else if (tokens[0].text == "{") {
+                return parseSequence();
+            }
+            else if (tokens[0].text == "(") {
+                if (tokens.size() < 2) {
+                    utils::panic("parser", "incomplete token stream");
+                    // unreachable
+                    return nullptr;
+                }
+                if (isIntrinsicToken(tokens[1])) {
+                    return parseIntrinsicCall();
+                }
+                else {
+                    return parseExprCall();
+                }
+            }
+            else if (tokens[0].text == "@") {
+                return parseAt();
+            }
+            else {
+                utils::panic("parser", "unrecognized token", tokens[0].sl);
+                // unreachable
+                return nullptr;
+            }
+            };
 
-    auto expr = parseExpr();
-    return expr;
-}
+        auto expr = parseExpr();
+        return expr;
+    }
 
 }  // namespace syntax
 
 namespace runtime {
 
-// ------------------------------
-// runtime values (those things can be copied (including pointer members))
-// ------------------------------
+    // ------------------------------
+    // runtime values (those things can be copied (including pointer members))
+    // ------------------------------
 
-struct Void {
-    Void() = default;
-};
+    struct Void {
+        Void() = default;
+    };
 
-struct Integer {
-    Integer(int v): value(v) {}
+    struct Integer {
+        Integer(int v) : value(v) {}
 
-    int value = 0;
-};
+        int value = 0;
+    };
 
-struct String {  // for string literals, this class contains the unquoted ones
-    String(std::string v): value(std::move(v)) {}
+    struct String {  // for string literals, this class contains the unquoted ones
+        String(std::string v) : value(std::move(v)) {}
 
-    std::string value;
-};
+        std::string value;
+    };
 
-// variable environment; newer variables have larger indices
-using Env = std::vector<std::pair<std::string, syntax::Location>>;
+    // variable environment; newer variables have larger indices
+    using Env = std::vector<std::pair<std::string, syntax::Location>>;
 
-std::optional<syntax::Location> lookup(const std::string &name, const Env &env) {
-    for (auto p = env.rbegin(); p != env.rend(); p++) {
-        if (p->first == name) {
-            return p->second;
+    std::optional<syntax::Location> lookup(const std::string& name, const Env& env) {
+        for (auto p = env.rbegin(); p != env.rend(); p++) {
+            if (p->first == name) {
+                return p->second;
+            }
         }
-    }
-    return std::nullopt;
-}
-
-struct Closure {
-    // a closure should copy its environment
-    Closure(Env e, const syntax::LambdaNode *f): env(std::move(e)), fun(f) {}
-
-    Env env;
-    const syntax::LambdaNode *fun;
-};
-
-using Value = std::variant<Void, Integer, String, Closure>;
-
-// stack layer
-
-struct Layer {
-    // a default argument is evaluated each time the function is called without
-    // that argument (not important here)
-    Layer(std::shared_ptr<Env> e = nullptr, const syntax::ExprNode *x = nullptr, bool f = false):
-        env(std::move(e)), expr(x), frame(f) {}
-    
-    Layer(std::string) {
-        // TODO: deserialize
+        return std::nullopt;
     }
 
-    // whether this is a frame
-    bool frame;
-    // one env per frame (closure call layer)
-    std::shared_ptr<Env> env;
-    const syntax::ExprNode *expr;
-    // program counter inside this expr
-    int pc = 0;
-    // temporary local information for evaluation
-    std::vector<syntax::Location> local;
-};
+    struct Closure {
+        // a closure should copy its environment
+        Closure(Env e, const syntax::LambdaNode* f) : env(std::move(e)), fun(f) {}
+
+        Env env;
+        const syntax::LambdaNode* fun;
+    };
+
+    using Value = std::variant<Void, Integer, String, Closure>;
+
+    // stack layer
+
+    struct Layer {
+        // a default argument is evaluated each time the function is called without
+        // that argument (not important here)
+        Layer(std::shared_ptr<Env> e = nullptr, const syntax::ExprNode* x = nullptr, bool f = false) :
+            env(std::move(e)), expr(x), frame(f) {
+        }
+
+        Layer(std::string) {
+            // TODO: deserialize
+        }
+
+        // whether this is a frame
+        bool frame;
+        // one env per frame (closure call layer)
+        std::shared_ptr<Env> env;
+        const syntax::ExprNode* expr;
+        // program counter inside this expr
+        int pc = 0;
+        // temporary local information for evaluation
+        std::vector<syntax::Location> local;
+    };
 
 }  // namespace runtime
 
 namespace serialization {
 
-std::vector<int> encodeNodePath(const syntax::ExprNode *node, const syntax::ExprNode *root) {
-    if (node == nullptr) {
-        utils::panic("serialization", "node is nullptr");
-        // unreachable
-        return std::vector<int>();
-    }
-    if (root == nullptr) {
-        utils::panic("serialization", "root is nullptr");
-        // unreachable
-        return std::vector<int>();
-    }
-    std::vector<int> nodePath;
-    std::function<bool(std::vector<int>&, const syntax::ExprNode*)>
-        findPath = [&](std::vector<int> &curPath, const syntax::ExprNode *curNode) -> bool {
-        if (curNode == node) {
-            // copy
-            nodePath = curPath;
-            return true;
-        } else {
-            if (auto inode = dynamic_cast<const syntax::IntegerNode*>(curNode)) {
-                return false;
-            } else if (auto snode = dynamic_cast<const syntax::StringNode*>(curNode)) {
-                return false;
-            } else if (auto vnode = dynamic_cast<const syntax::VariableNode*>(curNode)) {
-                return false;
-            } else if (auto lnode = dynamic_cast<const syntax::LambdaNode*>(curNode)) {
-                int numArgs = lnode->varList.size();
-                for (int i = 0; i < numArgs; i++) {
-                    curPath.push_back(i);
-                    if (findPath(curPath, lnode->varList[i])) {
-                        return true;
-                    }
-                    curPath.pop_back();
-                }
-                curPath.push_back(numArgs);
-                if (findPath(curPath, lnode->expr)) {
-                    return true;
-                }
-                curPath.pop_back();
-                return false;
-            } else if (auto lnode = dynamic_cast<const syntax::LetrecNode*>(curNode)) {
-                int numVars = lnode->varExprList.size();
-                for (int i = 0; i < numVars; i++) {
-                    curPath.push_back(2 * i);
-                    if (findPath(curPath, lnode->varExprList[i].first)) {
-                        return true;
-                    }
-                    curPath.pop_back();
-                    curPath.push_back(2 * i + 1);
-                    if (findPath(curPath, lnode->varExprList[i].second)) {
-                        return true;
-                    }
-                    curPath.pop_back();
-                }
-                curPath.push_back(2 * numVars);
-                if (findPath(curPath, lnode->expr)) {
-                    return true;
-                }
-                curPath.pop_back();
-                return false;
-            } else if (auto inode = dynamic_cast<const syntax::IfNode*>(curNode)) {
-                curPath.push_back(0);
-                if (findPath(curPath, inode->cond)) {
-                    return true;
-                }
-                curPath.pop_back();
-                curPath.push_back(1);
-                if (findPath(curPath, inode->branch1)) {
-                    return true;
-                }
-                curPath.pop_back();
-                curPath.push_back(2);
-                if (findPath(curPath, inode->branch2)) {
-                    return true;
-                }
-                curPath.pop_back();
-                return false;
-            } else if (auto snode = dynamic_cast<const syntax::SequenceNode*>(curNode)) {
-                int numExprs = snode->exprList.size();
-                for (int i = 0; i < numExprs; i++) {
-                    curPath.push_back(i);
-                    if (findPath(curPath, snode->exprList[i])) {
-                        return true;
-                    }
-                    curPath.pop_back();
-                }
-                return false;
-            } else if (auto inode = dynamic_cast<const syntax::IntrinsicCallNode*>(curNode)) {
-                int numArgs = inode->argList.size();
-                for (int i = 0; i < numArgs; i++) {
-                    curPath.push_back(i);
-                    if (findPath(curPath, inode->argList[i])) {
-                        return true;
-                    }
-                    curPath.pop_back();
-                }
-                return false;
-            } else if (auto enode = dynamic_cast<const syntax::ExprCallNode*>(curNode)) {
-                curPath.push_back(0);
-                if (findPath(curPath, enode->expr)) {
-                    return true;
-                }
-                curPath.pop_back();
-                int numArgs = enode->argList.size();
-                for (int i = 0; i < numArgs; i++) {
-                    curPath.push_back(i + 1);
-                    if (findPath(curPath, enode->argList[i])) {
-                        return true;
-                    }
-                    curPath.pop_back();
-                }
-                return false;
-            } else if (auto anode = dynamic_cast<const syntax::AtNode*>(curNode)) {
-                curPath.push_back(0);
-                if (findPath(curPath, anode->var)) {
-                    return true;
-                }
-                curPath.pop_back();
-                curPath.push_back(1);
-                if (findPath(curPath, anode->expr)) {
-                    return true;
-                }
-                curPath.pop_back();
-                return false;
-            } else {
-                utils::panic("serialization", "unrecognized AST node");
-                // unreachable
-                return false;
-            }
+    std::vector<int> encodeNodePath(const syntax::ExprNode* node, const syntax::ExprNode* root) {
+        if (node == nullptr) {
+            utils::panic("serialization", "node is nullptr");
+            // unreachable
+            return std::vector<int>();
         }
-    };
-    std::vector<int> currentPath;
-    if (findPath(currentPath, root)) {
-        return nodePath;
-    } else {
-        utils::panic("serialization", "node not found", node->sl);
-        // unreachable
-        return std::vector<int>();
-    }
-}
-
-const syntax::ExprNode *decodeNodePath(const std::vector<int> &path, const syntax::ExprNode *root) {
-    const syntax::ExprNode *curNode = root;
-    for (int i : path) {
-        if (auto inode = dynamic_cast<const syntax::IntegerNode*>(curNode)) {
-            return nullptr;
-        } else if (auto snode = dynamic_cast<const syntax::StringNode*>(curNode)) {
-            return nullptr;
-        } else if (auto vnode = dynamic_cast<const syntax::VariableNode*>(curNode)) {
-            return nullptr;
-        } else if (auto lnode = dynamic_cast<const syntax::LambdaNode*>(curNode)) {
-            int numArgs = lnode->varList.size();
-            if (i < numArgs) {
-                curNode = lnode->varList[i];
-            } else if (i == numArgs) {
-                curNode = lnode->expr;
-            } else {
-                return nullptr;
+        if (root == nullptr) {
+            utils::panic("serialization", "root is nullptr");
+            // unreachable
+            return std::vector<int>();
+        }
+        std::vector<int> nodePath;
+        std::function<bool(std::vector<int>&, const syntax::ExprNode*)>
+            findPath = [&](std::vector<int>& curPath, const syntax::ExprNode* curNode) -> bool {
+            if (curNode == node) {
+                // copy
+                nodePath = curPath;
+                return true;
             }
-        } else if (auto lnode = dynamic_cast<const syntax::LetrecNode*>(curNode)) {
-            int numVars = lnode->varExprList.size();
-            if (i < numVars * 2) {
-                int index = i / 2;
-                int offset = i % 2;
-                if (offset == 0) {
-                    curNode = lnode->varExprList[index].first;
-                } else {
-                    curNode = lnode->varExprList[index].second;
+            else {
+                if (auto inode = dynamic_cast<const syntax::IntegerNode*>(curNode)) {
+                    return false;
                 }
-            } else if (i == numVars * 2) {
-                curNode = lnode->expr;
-            } else {
+                else if (auto snode = dynamic_cast<const syntax::StringNode*>(curNode)) {
+                    return false;
+                }
+                else if (auto vnode = dynamic_cast<const syntax::VariableNode*>(curNode)) {
+                    return false;
+                }
+                else if (auto lnode = dynamic_cast<const syntax::LambdaNode*>(curNode)) {
+                    int numArgs = lnode->varList.size();
+                    for (int i = 0; i < numArgs; i++) {
+                        curPath.push_back(i);
+                        if (findPath(curPath, lnode->varList[i])) {
+                            return true;
+                        }
+                        curPath.pop_back();
+                    }
+                    curPath.push_back(numArgs);
+                    if (findPath(curPath, lnode->expr)) {
+                        return true;
+                    }
+                    curPath.pop_back();
+                    return false;
+                }
+                else if (auto lnode = dynamic_cast<const syntax::LetrecNode*>(curNode)) {
+                    int numVars = lnode->varExprList.size();
+                    for (int i = 0; i < numVars; i++) {
+                        curPath.push_back(2 * i);
+                        if (findPath(curPath, lnode->varExprList[i].first)) {
+                            return true;
+                        }
+                        curPath.pop_back();
+                        curPath.push_back(2 * i + 1);
+                        if (findPath(curPath, lnode->varExprList[i].second)) {
+                            return true;
+                        }
+                        curPath.pop_back();
+                    }
+                    curPath.push_back(2 * numVars);
+                    if (findPath(curPath, lnode->expr)) {
+                        return true;
+                    }
+                    curPath.pop_back();
+                    return false;
+                }
+                else if (auto inode = dynamic_cast<const syntax::IfNode*>(curNode)) {
+                    curPath.push_back(0);
+                    if (findPath(curPath, inode->cond)) {
+                        return true;
+                    }
+                    curPath.pop_back();
+                    curPath.push_back(1);
+                    if (findPath(curPath, inode->branch1)) {
+                        return true;
+                    }
+                    curPath.pop_back();
+                    curPath.push_back(2);
+                    if (findPath(curPath, inode->branch2)) {
+                        return true;
+                    }
+                    curPath.pop_back();
+                    return false;
+                }
+                else if (auto snode = dynamic_cast<const syntax::SequenceNode*>(curNode)) {
+                    int numExprs = snode->exprList.size();
+                    for (int i = 0; i < numExprs; i++) {
+                        curPath.push_back(i);
+                        if (findPath(curPath, snode->exprList[i])) {
+                            return true;
+                        }
+                        curPath.pop_back();
+                    }
+                    return false;
+                }
+                else if (auto inode = dynamic_cast<const syntax::IntrinsicCallNode*>(curNode)) {
+                    int numArgs = inode->argList.size();
+                    for (int i = 0; i < numArgs; i++) {
+                        curPath.push_back(i);
+                        if (findPath(curPath, inode->argList[i])) {
+                            return true;
+                        }
+                        curPath.pop_back();
+                    }
+                    return false;
+                }
+                else if (auto enode = dynamic_cast<const syntax::ExprCallNode*>(curNode)) {
+                    curPath.push_back(0);
+                    if (findPath(curPath, enode->expr)) {
+                        return true;
+                    }
+                    curPath.pop_back();
+                    int numArgs = enode->argList.size();
+                    for (int i = 0; i < numArgs; i++) {
+                        curPath.push_back(i + 1);
+                        if (findPath(curPath, enode->argList[i])) {
+                            return true;
+                        }
+                        curPath.pop_back();
+                    }
+                    return false;
+                }
+                else if (auto anode = dynamic_cast<const syntax::AtNode*>(curNode)) {
+                    curPath.push_back(0);
+                    if (findPath(curPath, anode->var)) {
+                        return true;
+                    }
+                    curPath.pop_back();
+                    curPath.push_back(1);
+                    if (findPath(curPath, anode->expr)) {
+                        return true;
+                    }
+                    curPath.pop_back();
+                    return false;
+                }
+                else {
+                    utils::panic("serialization", "unrecognized AST node");
+                    // unreachable
+                    return false;
+                }
+            }
+            };
+        std::vector<int> currentPath;
+        if (findPath(currentPath, root)) {
+            return nodePath;
+        }
+        else {
+            utils::panic("serialization", "node not found", node->sl);
+            // unreachable
+            return std::vector<int>();
+        }
+    }
+
+    const syntax::ExprNode* decodeNodePath(const std::vector<int>& path, const syntax::ExprNode* root) {
+        const syntax::ExprNode* curNode = root;
+        for (int i : path) {
+            if (auto inode = dynamic_cast<const syntax::IntegerNode*>(curNode)) {
                 return nullptr;
             }
-        } else if (auto inode = dynamic_cast<const syntax::IfNode*>(curNode)) {
-            if (i == 0) {
-                curNode = inode->cond;
-            } else if (i == 1) {
-                curNode = inode->branch1;
-            } else if (i == 2) {
-                curNode = inode->branch2;
-            } else {
+            else if (auto snode = dynamic_cast<const syntax::StringNode*>(curNode)) {
                 return nullptr;
             }
-        } else if (auto snode = dynamic_cast<const syntax::SequenceNode*>(curNode)) {
-            int numExprs = snode->exprList.size();
-            if (i < numExprs) {
-                curNode = snode->exprList[i];
-            } else {
+            else if (auto vnode = dynamic_cast<const syntax::VariableNode*>(curNode)) {
                 return nullptr;
             }
-        } else if (auto inode = dynamic_cast<const syntax::IntrinsicCallNode*>(curNode)) {
-            int numArgs = inode->argList.size();
-            if (i < numArgs) {
-                curNode = inode->argList[i];
-            } else {
-                return nullptr;
-            }
-        } else if (auto enode = dynamic_cast<const syntax::ExprCallNode*>(curNode)) {
-            if (i == 0) {
-                curNode = enode->expr;
-            } else {
-                int numArgs = enode->argList.size();
-                if (i <= numArgs) {
-                    curNode = enode->argList[i - 1];
-                } else {
+            else if (auto lnode = dynamic_cast<const syntax::LambdaNode*>(curNode)) {
+                int numArgs = lnode->varList.size();
+                if (i < numArgs) {
+                    curNode = lnode->varList[i];
+                }
+                else if (i == numArgs) {
+                    curNode = lnode->expr;
+                }
+                else {
                     return nullptr;
                 }
             }
-        } else if (auto anode = dynamic_cast<const syntax::AtNode*>(curNode)) {
-            if (i == 0) {
-                curNode = anode->var;
-            } else if (i == 1) {
-                curNode = anode->expr;
-            } else {
-                return nullptr;
+            else if (auto lnode = dynamic_cast<const syntax::LetrecNode*>(curNode)) {
+                int numVars = lnode->varExprList.size();
+                if (i < numVars * 2) {
+                    int index = i / 2;
+                    int offset = i % 2;
+                    if (offset == 0) {
+                        curNode = lnode->varExprList[index].first;
+                    }
+                    else {
+                        curNode = lnode->varExprList[index].second;
+                    }
+                }
+                else if (i == numVars * 2) {
+                    curNode = lnode->expr;
+                }
+                else {
+                    return nullptr;
+                }
             }
-        } else {
-            utils::panic("serialization", "unrecognized AST node");
+            else if (auto inode = dynamic_cast<const syntax::IfNode*>(curNode)) {
+                if (i == 0) {
+                    curNode = inode->cond;
+                }
+                else if (i == 1) {
+                    curNode = inode->branch1;
+                }
+                else if (i == 2) {
+                    curNode = inode->branch2;
+                }
+                else {
+                    return nullptr;
+                }
+            }
+            else if (auto snode = dynamic_cast<const syntax::SequenceNode*>(curNode)) {
+                int numExprs = snode->exprList.size();
+                if (i < numExprs) {
+                    curNode = snode->exprList[i];
+                }
+                else {
+                    return nullptr;
+                }
+            }
+            else if (auto inode = dynamic_cast<const syntax::IntrinsicCallNode*>(curNode)) {
+                int numArgs = inode->argList.size();
+                if (i < numArgs) {
+                    curNode = inode->argList[i];
+                }
+                else {
+                    return nullptr;
+                }
+            }
+            else if (auto enode = dynamic_cast<const syntax::ExprCallNode*>(curNode)) {
+                if (i == 0) {
+                    curNode = enode->expr;
+                }
+                else {
+                    int numArgs = enode->argList.size();
+                    if (i <= numArgs) {
+                        curNode = enode->argList[i - 1];
+                    }
+                    else {
+                        return nullptr;
+                    }
+                }
+            }
+            else if (auto anode = dynamic_cast<const syntax::AtNode*>(curNode)) {
+                if (i == 0) {
+                    curNode = anode->var;
+                }
+                else if (i == 1) {
+                    curNode = anode->expr;
+                }
+                else {
+                    return nullptr;
+                }
+            }
+            else {
+                utils::panic("serialization", "unrecognized AST node");
+            }
         }
+        return curNode;
     }
-    return curNode;
-}
 
-using Path = std::vector<int>;
+    using Path = std::vector<int>;
 
-std::string pathToString(const Path &path) {
-    std::string s = "[";
-    for (int i : path) {
-        s += " ";
-        s += std::to_string(i);
-    }
-    s += " ]";
-    return s;
-}
-
-Path stringToPath(const std::string &s) {
-    // TODO
-    return Path();
-}
-
-std::string envToString(const runtime::Env &env) {
-    std::string s = "[";
-    for (auto &p : env) {
-        s += " ";
-        s += p.first;
-        s += " ";
-        s += std::to_string(p.second);
-    }
-    s += " ]";
-    return s;
-}
-
-runtime::Env stringToEnv(const std::string &s) {
-    // TODO
-    return runtime::Env();
-}
-
-std::string valueToString(const runtime::Value &v, const syntax::ExprNode *root) {
-    if (std::holds_alternative<runtime::Void>(v)) {
-        return "<void>";
-    } else if (std::holds_alternative<runtime::Integer>(v)) {
-        auto i = std::get<runtime::Integer>(v);
-        return std::to_string(i.value);
-    } else if (std::holds_alternative<runtime::String>(v)) {
-        auto s = std::get<runtime::String>(v);
-        return syntax::quote(s.value);
-    } else {
-        auto c = std::get<runtime::Closure>(v);
-        std::string s = envToString(c.env);
-        s += " ";
-        s += pathToString(encodeNodePath(c.fun, root));
+    std::string pathToString(const Path& path) {
+        std::string s = "[";
+        for (int i : path) {
+            s += " ";
+            s += std::to_string(i);
+        }
+        s += " ]";
         return s;
     }
-}
 
-runtime::Value stringToValue(const std::string &s) {
-    // TODO
-    return runtime::Void();
-}
-
-std::string layerToString(const runtime::Layer &layer, const syntax::ExprNode *root) {
-    std::string serialized_layer;
-    // bool frame;
-    if (layer.frame) {
-        serialized_layer += "frame";
-    } else {
-        serialized_layer += "nonframe";
+    Path stringToPath(const std::string& s) {
+        std::istringstream sin(s);
+        Path path;
+        std::string word;
+        while (sin >> word) {
+            if (word == "[") {
+                continue;
+            }
+            else if (word == "]") {
+                break;
+            }
+            else {
+                path.push_back(std::stoi(word));
+            }
+        }
+        return path;
     }
-    // std::shared_ptr<Env> env;
-    if (layer.frame) {
+
+    std::string envToString(const runtime::Env& env) {
+        std::string s = "[";
+        for (auto& p : env) {
+            s += " ";
+            s += p.first;
+            s += " ";
+            s += std::to_string(p.second);
+        }
+        s += " ]";
+        return s;
+    }
+
+    runtime::Env stringToEnv(const std::string& s) {
+        std::istringstream sin(s);
+        runtime::Env env;
+        std::string word;
+        while (sin >> word) {
+            if (word == "[") {
+                continue;
+            } else if (word == "]") {
+                break;
+            } else {
+                syntax::Location loc;
+                sin >> loc;
+                env.push_back(std::make_pair(word, loc));
+            }
+        }
+        return env;
+    }
+
+    std::string valueToString(const runtime::Value& v, const syntax::ExprNode* root) {
+        if (std::holds_alternative<runtime::Void>(v)) {
+            return "<void>";
+        }
+        else if (std::holds_alternative<runtime::Integer>(v)) {
+            auto i = std::get<runtime::Integer>(v);
+            return std::to_string(i.value);
+        }
+        else if (std::holds_alternative<runtime::String>(v)) {
+            auto s = std::get<runtime::String>(v);
+            return syntax::quote(s.value);
+        }
+        else {
+            auto c = std::get<runtime::Closure>(v);
+            std::string s = envToString(c.env);
+            s += " ";
+            s += pathToString(encodeNodePath(c.fun, root));
+            return s;
+        }
+    }
+
+    runtime::Value stringToValue(const std::string& s) {
+        // TODO
+        return runtime::Void();
+    }
+
+    std::string layerToString(const runtime::Layer& layer, const syntax::ExprNode* root) {
+        std::string serialized_layer;
+        // bool frame;
+        if (layer.frame) {
+            serialized_layer += "frame";
+        }
+        else {
+            serialized_layer += "nonframe";
+        }
+        // std::shared_ptr<Env> env;
+        if (layer.frame) {
+            serialized_layer += " ";
+            serialized_layer += envToString(*(layer.env));
+        }
+        // const syntax::ExprNode *expr;
         serialized_layer += " ";
-        serialized_layer += envToString(*(layer.env));
-    }
-    // const syntax::ExprNode *expr;
-    serialized_layer += " ";
-    if (layer.expr != nullptr) {
-        serialized_layer += pathToString(encodeNodePath(layer.expr, root));
-    } else {
-        serialized_layer += "[ -1 ]";
-    }
-    // int pc = 0;
-    serialized_layer += " ";
-    serialized_layer += std::to_string(layer.pc);
-    // std::vector<Location> local;
-    serialized_layer += " [";
-    for (auto &l : layer.local) {
+        if (layer.expr != nullptr) {
+            serialized_layer += pathToString(encodeNodePath(layer.expr, root));
+        }
+        else {
+            serialized_layer += "[ -1 ]";
+        }
+        // int pc = 0;
         serialized_layer += " ";
-        serialized_layer += std::to_string(l);
+        serialized_layer += std::to_string(layer.pc);
+        // std::vector<Location> local;
+        serialized_layer += " [";
+        for (auto& l : layer.local) {
+            serialized_layer += " ";
+            serialized_layer += std::to_string(l);
+        }
+        serialized_layer += " ]";
+        return serialized_layer;
     }
-    serialized_layer += " ]";
-    return serialized_layer;
-}
 
-runtime::Layer stringToLayer(const std::string &str, const syntax::ExprNode *root) {
-    // TODO
-    return runtime::Layer();
-}
+    runtime::Layer stringToLayer(const std::string& str, const syntax::ExprNode* root) {
+        // TODO
+        return runtime::Layer();
+    }
 
 }  // namespace serialization
 
@@ -1450,7 +1561,7 @@ public:
         source = std::move(src);
         // parsing and static analysis (TODO: exceptions?)
         expr = syntax::parse(syntax::lex(source));
-        std::function<void(syntax::ExprNode*)> checkDuplicate = [](syntax::ExprNode *e) -> void {
+        std::function<void(syntax::ExprNode*)> checkDuplicate = [](syntax::ExprNode* e) -> void {
             if (auto lnode = dynamic_cast<syntax::LambdaNode*>(e)) {
                 std::unordered_set<std::string> varNames;
                 for (auto var : lnode->varList) {
@@ -1459,28 +1570,30 @@ public:
                     }
                     varNames.insert(var->name);
                 }
-            } else if (auto lnode = dynamic_cast<syntax::LetrecNode*>(e)) {
+            }
+            else if (auto lnode = dynamic_cast<syntax::LetrecNode*>(e)) {
                 std::unordered_set<std::string> varNames;
-                for (const auto &ve : lnode->varExprList) {
+                for (const auto& ve : lnode->varExprList) {
                     if (varNames.contains(ve.first->name)) {
                         utils::panic("sema", "duplicate binding names", lnode->sl);
                     }
                     varNames.insert(ve.first->name);
                 }
             }
-        };
+            };
         expr->traverse(syntax::TraversalMode::TOP_DOWN, checkDuplicate);
         expr->computeFreeVars();
         expr->computeTail(false);
         // pre-allocate integer literals and string literals
-        std::function<void(syntax::ExprNode*)> preAllocate = [this](syntax::ExprNode *e) -> void {
+        std::function<void(syntax::ExprNode*)> preAllocate = [this](syntax::ExprNode* e) -> void {
             if (auto inode = dynamic_cast<syntax::IntegerNode*>(e)) {
                 // TODO: exceptions
                 inode->loc = this->_new<runtime::Integer>(std::stoi(inode->val));
-            } else if (auto snode = dynamic_cast<syntax::StringNode*>(e)) {
+            }
+            else if (auto snode = dynamic_cast<syntax::StringNode*>(e)) {
                 snode->loc = this->_new<runtime::String>(syntax::unquote(snode->val));
             }
-        };
+            };
         expr->traverse(syntax::TraversalMode::TOP_DOWN, preAllocate);
         numLiterals = heap.size();
         // the main frame (which cannot be removed by TCO)
@@ -1488,7 +1601,7 @@ public:
         // the first expression (using the env of the main frame)
         stack.emplace_back(stack.back().env, expr);
     }
-    State(const State &state):
+    State(const State& state) :
         source(state.source),
         expr(state.expr->clone()),
         stack(state.stack),
@@ -1496,7 +1609,7 @@ public:
         numLiterals(state.numLiterals),
         resultLoc(state.resultLoc) {
     }
-    State &operator=(const State &state) {
+    State& operator=(const State& state) {
         if (this != &state) {
             source = state.source;
             delete expr;
@@ -1508,7 +1621,7 @@ public:
         }
         return *this;
     }
-    State(State &&state):
+    State(State&& state) :
         source(std::move(state.source)),
         expr(state.expr),
         stack(std::move(state.stack)),
@@ -1517,7 +1630,7 @@ public:
         resultLoc(state.resultLoc) {
         state.expr = nullptr;
     }
-    State &operator=(State &&state) {
+    State& operator=(State&& state) {
         if (this != &state) {
             source = std::move(state.source);
             delete expr;
@@ -1540,7 +1653,7 @@ public:
     bool step() {
         // be careful! this reference may be invalidated after modifying the stack
         // so always keep stack change as the last operation(s)
-        auto &layer = stack.back();
+        auto& layer = stack.back();
         // main frame; end of evaluation
         if (layer.expr == nullptr) {
             return false;
@@ -1549,10 +1662,12 @@ public:
         if (auto inode = dynamic_cast<const syntax::IntegerNode*>(layer.expr)) {
             resultLoc = inode->loc;
             stack.pop_back();
-        } else if (auto snode = dynamic_cast<const syntax::StringNode*>(layer.expr)) {
+        }
+        else if (auto snode = dynamic_cast<const syntax::StringNode*>(layer.expr)) {
             resultLoc = snode->loc;
             stack.pop_back();
-        } else if (auto vnode = dynamic_cast<const syntax::VariableNode*>(layer.expr)) {
+        }
+        else if (auto vnode = dynamic_cast<const syntax::VariableNode*>(layer.expr)) {
             auto varName = vnode->name;
             auto loc = runtime::lookup(varName, *(layer.env));
             if (!loc.has_value()) {
@@ -1561,7 +1676,8 @@ public:
             }
             resultLoc = loc.value();
             stack.pop_back();
-        } else if (auto lnode = dynamic_cast<const syntax::LambdaNode*>(layer.expr)) {
+        }
+        else if (auto lnode = dynamic_cast<const syntax::LambdaNode*>(layer.expr)) {
             // copy the statically used part of the env into the closure
             runtime::Env savedEnv;
             // copy
@@ -1578,7 +1694,8 @@ public:
             std::reverse(savedEnv.begin(), savedEnv.end());
             resultLoc = _new<runtime::Closure>(savedEnv, lnode);
             stack.pop_back();
-        } else if (auto lnode = dynamic_cast<const syntax::LetrecNode*>(layer.expr)) {
+        }
+        else if (auto lnode = dynamic_cast<const syntax::LetrecNode*>(layer.expr)) {
             // unified argument recording
             if (layer.pc > 1 && layer.pc <= static_cast<int>(lnode->varExprList.size()) + 1) {
                 auto varName = lnode->varExprList[layer.pc - 2].first->name;
@@ -1597,14 +1714,15 @@ public:
             // create all new locations
             if (layer.pc == 0) {
                 layer.pc++;
-                for (const auto &[var, _] : lnode->varExprList) {
+                for (const auto& [var, _] : lnode->varExprList) {
                     layer.env->push_back(std::make_pair(
                         var->name,
                         _new<runtime::Void>()
                     ));
                 }
-            // evaluate bindings
-            } else if (layer.pc <= static_cast<int>(lnode->varExprList.size())) {
+                // evaluate bindings
+            }
+            else if (layer.pc <= static_cast<int>(lnode->varExprList.size())) {
                 layer.pc++;
                 // note: growing the stack might invalidate the reference "layer"
                 //       but this is fine since next time "layer" will be re-bound
@@ -1612,15 +1730,17 @@ public:
                     layer.env,
                     lnode->varExprList[layer.pc - 2].second
                 );
-            // evaluate body
-            } else if (layer.pc == static_cast<int>(lnode->varExprList.size()) + 1) {
+                // evaluate body
+            }
+            else if (layer.pc == static_cast<int>(lnode->varExprList.size()) + 1) {
                 layer.pc++;
                 stack.emplace_back(
                     layer.env,
                     lnode->expr
                 );
-            // finish letrec
-            } else {
+                // finish letrec
+            }
+            else {
                 int nParams = lnode->varExprList.size();
                 for (int i = 0; i < nParams; i++) {
                     layer.env->pop_back();
@@ -1629,13 +1749,15 @@ public:
                 // no need to update resultLoc: inherited from body evaluation
                 stack.pop_back();
             }
-        } else if (auto inode = dynamic_cast<const syntax::IfNode*>(layer.expr)) {
+        }
+        else if (auto inode = dynamic_cast<const syntax::IfNode*>(layer.expr)) {
             // evaluate condition
             if (layer.pc == 0) {
                 layer.pc++;
                 stack.emplace_back(layer.env, inode->cond);
-            // evaluate one branch
-            } else if (layer.pc == 1) {
+                // evaluate one branch
+            }
+            else if (layer.pc == 1) {
                 layer.pc++;
                 // inherited condition value
                 if (!std::holds_alternative<runtime::Integer>(heap[resultLoc])) {
@@ -1644,15 +1766,18 @@ public:
                 }
                 if (std::get<runtime::Integer>(heap[resultLoc]).value) {
                     stack.emplace_back(layer.env, inode->branch1);
-                } else {
+                }
+                else {
                     stack.emplace_back(layer.env, inode->branch2);
                 }
-            // finish if
-            } else {
+                // finish if
+            }
+            else {
                 // no need to update resultLoc: inherited
                 stack.pop_back();
             }
-        } else if (auto snode = dynamic_cast<const syntax::SequenceNode*>(layer.expr)) {
+        }
+        else if (auto snode = dynamic_cast<const syntax::SequenceNode*>(layer.expr)) {
             // evaluate one-by-one
             if (layer.pc < static_cast<int>(snode->exprList.size())) {
                 layer.pc++;
@@ -1660,13 +1785,15 @@ public:
                     layer.env,
                     snode->exprList[layer.pc - 1]
                 );
-            // finish
-            } else {
+                // finish
+            }
+            else {
                 // sequence's value is the last expression's value
                 // no need to update resultLoc: inherited
                 stack.pop_back();
             }
-        } else if (auto inode = dynamic_cast<const syntax::IntrinsicCallNode*>(layer.expr)) {
+        }
+        else if (auto inode = dynamic_cast<const syntax::IntrinsicCallNode*>(layer.expr)) {
             // unified argument recording
             if (layer.pc > 0 && layer.pc <= static_cast<int>(inode->argList.size())) {
                 layer.local.push_back(resultLoc);
@@ -1678,8 +1805,9 @@ public:
                     layer.env,
                     inode->argList[layer.pc - 1]
                 );
-            // intrinsic call doesn't grow the stack
-            } else {
+                // intrinsic call doesn't grow the stack
+            }
+            else {
                 auto value = _callIntrinsic(
                     layer.expr->sl,
                     inode->intrinsic,
@@ -1689,7 +1817,8 @@ public:
                 resultLoc = _moveNew(std::move(value));
                 stack.pop_back();
             }
-        } else if (auto enode = dynamic_cast<const syntax::ExprCallNode*>(layer.expr)) {
+        }
+        else if (auto enode = dynamic_cast<const syntax::ExprCallNode*>(layer.expr)) {
             // unified argument recording
             if (layer.pc > 2 && layer.pc <= static_cast<int>(enode->argList.size()) + 2) {
                 layer.local.push_back(resultLoc);
@@ -1701,32 +1830,35 @@ public:
                     layer.env,
                     enode->expr
                 );
-            // initialization
-            } else if (layer.pc == 1) {
+                // initialization
+            }
+            else if (layer.pc == 1) {
                 layer.pc++;
                 // inherited callee location
                 layer.local.push_back(resultLoc);
-            // evaluate arguments
-            } else if (layer.pc <= static_cast<int>(enode->argList.size()) + 1) {
+                // evaluate arguments
+            }
+            else if (layer.pc <= static_cast<int>(enode->argList.size()) + 1) {
                 layer.pc++;
                 stack.emplace_back(
                     layer.env,
                     enode->argList[layer.pc - 3]
                 );
-            // call
-            } else if (layer.pc == static_cast<int>(enode->argList.size()) + 2) {
+                // call
+            }
+            else if (layer.pc == static_cast<int>(enode->argList.size()) + 2) {
                 layer.pc++;
                 auto exprLoc = layer.local[0];
                 if (!std::holds_alternative<runtime::Closure>(heap[exprLoc])) {
                     _errorStack();
                     utils::panic("runtime", "calling a non-callable", layer.expr->sl);
                 }
-                auto &closure = std::get<runtime::Closure>(heap[exprLoc]);
+                auto& closure = std::get<runtime::Closure>(heap[exprLoc]);
                 // types will be checked inside the closure call
                 if (
                     static_cast<int>(layer.local.size()) - 1 !=
                     static_cast<int>(closure.fun->varList.size())
-                ) {
+                    ) {
                     _errorStack();
                     utils::panic("runtime", "wrong number of arguments", layer.expr->sl);
                 }
@@ -1755,17 +1887,20 @@ public:
                     closure.fun->expr,
                     true
                 );
-            // finish
-            } else {
+                // finish
+            }
+            else {
                 // no need to update resultLoc: inherited
                 stack.pop_back();
             }
-        } else if (auto anode = dynamic_cast<const syntax::AtNode*>(layer.expr)) {
+        }
+        else if (auto anode = dynamic_cast<const syntax::AtNode*>(layer.expr)) {
             // evaluate the expr
             if (layer.pc == 0) {
                 layer.pc++;
                 stack.emplace_back(layer.env, anode->expr);
-            } else {
+            }
+            else {
                 // inherited resultLoc
                 if (!std::holds_alternative<runtime::Closure>(heap[resultLoc])) {
                     _errorStack();
@@ -1784,7 +1919,8 @@ public:
                 resultLoc = loc.value();
                 stack.pop_back();
             }
-        } else {
+        }
+        else {
             _errorStack();
             utils::panic("runtime", "unrecognized AST node", layer.expr->sl);
         }
@@ -1804,10 +1940,10 @@ public:
             }
         }
     }
-    const runtime::Value &getResult() const {
+    const runtime::Value& getResult() const {
         return heap[resultLoc];
     }
-    const syntax::ExprNode *getExpr() const {
+    const syntax::ExprNode* getExpr() const {
         return expr;
     }
     std::string serialize() const {
@@ -1817,14 +1953,14 @@ public:
         // (skipped, because source is more accurate) syntax::ExprNode *expr;
         // std::vector<Layer> stack;
         serialized_state += " [";
-        for (auto &layer : stack) {
+        for (auto& layer : stack) {
             serialized_state += " ";
             serialized_state += serialization::layerToString(layer, expr);
         }
         serialized_state += " ]";
         // std::vector<Value> heap;
         serialized_state += " [";
-        for (auto &value : heap) {
+        for (auto& value : heap) {
             serialized_state += " ";
             serialized_state += serialization::valueToString(value, expr);
         }
@@ -1839,8 +1975,8 @@ public:
     }
 private:
     template <typename... Alt>
-    requires (true && ... && (std::same_as<Alt, runtime::Value> || utils::isAlternativeOf<Alt, runtime::Value>))
-    void _typecheck(utils::SourceLocation sl, const std::vector<syntax::Location> &args) {
+        requires (true && ... && (std::same_as<Alt, runtime::Value> || utils::isAlternativeOf<Alt, runtime::Value>))
+    void _typecheck(utils::SourceLocation sl, const std::vector<syntax::Location>& args) {
         bool ok = args.size() == sizeof...(Alt);
         int i = -1;
         ok = ok && (true && ... && (
@@ -1848,11 +1984,12 @@ private:
             [&] {
                 if constexpr (std::same_as<Alt, runtime::Value>) {
                     return true;
-                } else {
+                }
+                else {
                     return std::holds_alternative<Alt>(heap[args[i]]);
                 }
             } ()
-        ));
+                ));
         if (!ok) {
             _errorStack();
             utils::panic("runtime", "type error on intrinsic call", sl);
@@ -1860,30 +1997,34 @@ private:
     }
     // intrinsic dispatch
     runtime::Value _callIntrinsic(
-        utils::SourceLocation sl, const std::string &name, const std::vector<syntax::Location> &args
+        utils::SourceLocation sl, const std::string& name, const std::vector<syntax::Location>& args
     ) {
         if (name == ".void") {
             _typecheck<>(sl, args);
             return runtime::Void();
-        } else if (name == ".+") {
+        }
+        else if (name == ".+") {
             _typecheck<runtime::Integer, runtime::Integer>(sl, args);
             return runtime::Integer(
                 std::get<runtime::Integer>(heap[args[0]]).value +
                 std::get<runtime::Integer>(heap[args[1]]).value
             );
-        } else if (name == ".-") {
+        }
+        else if (name == ".-") {
             _typecheck<runtime::Integer, runtime::Integer>(sl, args);
             return runtime::Integer(
                 std::get<runtime::Integer>(heap[args[0]]).value -
                 std::get<runtime::Integer>(heap[args[1]]).value
             );
-        } else if (name == ".*") {
+        }
+        else if (name == ".*") {
             _typecheck<runtime::Integer, runtime::Integer>(sl, args);
             return runtime::Integer(
                 std::get<runtime::Integer>(heap[args[0]]).value *
                 std::get<runtime::Integer>(heap[args[1]]).value
             );
-        } else if (name == "./") {
+        }
+        else if (name == "./") {
             _typecheck<runtime::Integer, runtime::Integer>(sl, args);
             int d = std::get<runtime::Integer>(heap[args[1]]).value;
             if (d == 0) {
@@ -1893,7 +2034,8 @@ private:
                 std::get<runtime::Integer>(heap[args[0]]).value /
                 d
             );
-        } else if (name == ".%") {
+        }
+        else if (name == ".%") {
             _typecheck<runtime::Integer, runtime::Integer>(sl, args);
             int d = std::get<runtime::Integer>(heap[args[1]]).value;
             if (d == 0) {
@@ -1903,107 +2045,125 @@ private:
                 std::get<runtime::Integer>(heap[args[0]]).value %
                 d
             );
-        } else if (name == ".<") {
+        }
+        else if (name == ".<") {
             _typecheck<runtime::Integer, runtime::Integer>(sl, args);
             return runtime::Integer(
                 std::get<runtime::Integer>(heap[args[0]]).value <
                 std::get<runtime::Integer>(heap[args[1]]).value ? 1 : 0
             );
-        } else if (name == ".<=") {
+        }
+        else if (name == ".<=") {
             _typecheck<runtime::Integer, runtime::Integer>(sl, args);
             return runtime::Integer(
                 std::get<runtime::Integer>(heap[args[0]]).value <=
                 std::get<runtime::Integer>(heap[args[1]]).value ? 1 : 0
             );
-        } else if (name == ".>") {
+        }
+        else if (name == ".>") {
             _typecheck<runtime::Integer, runtime::Integer>(sl, args);
             return runtime::Integer(
                 std::get<runtime::Integer>(heap[args[0]]).value >
                 std::get<runtime::Integer>(heap[args[1]]).value ? 1 : 0
             );
-        } else if (name == ".>=") {
+        }
+        else if (name == ".>=") {
             _typecheck<runtime::Integer, runtime::Integer>(sl, args);
             return runtime::Integer(
                 std::get<runtime::Integer>(heap[args[0]]).value >=
                 std::get<runtime::Integer>(heap[args[1]]).value ? 1 : 0
             );
-        } else if (name == ".=") {
+        }
+        else if (name == ".=") {
             _typecheck<runtime::Integer, runtime::Integer>(sl, args);
             return runtime::Integer(
                 std::get<runtime::Integer>(heap[args[0]]).value ==
                 std::get<runtime::Integer>(heap[args[1]]).value ? 1 : 0
             );
-        } else if (name == "./=") {
+        }
+        else if (name == "./=") {
             _typecheck<runtime::Integer, runtime::Integer>(sl, args);
             return runtime::Integer(
                 std::get<runtime::Integer>(heap[args[0]]).value !=
                 std::get<runtime::Integer>(heap[args[1]]).value ? 1 : 0
             );
-        } else if (name == ".and") {
+        }
+        else if (name == ".and") {
             _typecheck<runtime::Integer, runtime::Integer>(sl, args);
             return runtime::Integer(
                 std::get<runtime::Integer>(heap[args[0]]).value &&
                 std::get<runtime::Integer>(heap[args[1]]).value ? 1 : 0
             );
-        } else if (name == ".or") {
+        }
+        else if (name == ".or") {
             _typecheck<runtime::Integer, runtime::Integer>(sl, args);
             return runtime::Integer(
                 std::get<runtime::Integer>(heap[args[0]]).value ||
                 std::get<runtime::Integer>(heap[args[1]]).value ? 1 : 0
             );
-        } else if (name == ".not") {
+        }
+        else if (name == ".not") {
             _typecheck<runtime::Integer>(sl, args);
             return runtime::Integer(
                 std::get<runtime::Integer>(heap[args[0]]).value ? 0 : 1
             );
-        } else if (name == ".s+") {
+        }
+        else if (name == ".s+") {
             _typecheck<runtime::String, runtime::String>(sl, args);
             return runtime::String(
                 std::get<runtime::String>(heap[args[0]]).value +
                 std::get<runtime::String>(heap[args[1]]).value
             );
-        } else if (name == ".s<") {
+        }
+        else if (name == ".s<") {
             _typecheck<runtime::String, runtime::String>(sl, args);
             return runtime::Integer(
                 std::get<runtime::String>(heap[args[0]]).value <
                 std::get<runtime::String>(heap[args[1]]).value ? 1 : 0
             );
-        } else if (name == ".s<=") {
+        }
+        else if (name == ".s<=") {
             _typecheck<runtime::String, runtime::String>(sl, args);
             return runtime::Integer(
                 std::get<runtime::String>(heap[args[0]]).value <=
                 std::get<runtime::String>(heap[args[1]]).value ? 1 : 0
             );
-        } else if (name == ".s>") {
+        }
+        else if (name == ".s>") {
             _typecheck<runtime::String, runtime::String>(sl, args);
             return runtime::Integer(
                 std::get<runtime::String>(heap[args[0]]).value >
                 std::get<runtime::String>(heap[args[1]]).value ? 1 : 0
             );
-        } else if (name == ".s>=") {
+        }
+        else if (name == ".s>=") {
             _typecheck<runtime::String, runtime::String>(sl, args);
             return runtime::Integer(
                 std::get<runtime::String>(heap[args[0]]).value >=
                 std::get<runtime::String>(heap[args[1]]).value ? 1 : 0
             );
-        } else if (name == ".s=") {
+        }
+        else if (name == ".s=") {
             _typecheck<runtime::String, runtime::String>(sl, args);
             return runtime::Integer(
                 std::get<runtime::String>(heap[args[0]]).value ==
                 std::get<runtime::String>(heap[args[1]]).value ? 1 : 0
             );
-        } else if (name == ".s/=") {
+        }
+        else if (name == ".s/=") {
             _typecheck<runtime::String, runtime::String>(sl, args);
             return runtime::Integer(
                 std::get<runtime::String>(heap[args[0]]).value !=
                 std::get<runtime::String>(heap[args[1]]).value ? 1 : 0
             );
-        } else if (name == ".s||") {
+        }
+        else if (name == ".s||") {
             _typecheck<runtime::String>(sl, args);
             return runtime::Integer(
                 std::get<runtime::String>(heap[args[0]]).value.size()
             );
-        } else if (name == ".s[]") {
+        }
+        else if (name == ".s[]") {
             _typecheck<runtime::String, runtime::Integer, runtime::Integer>(sl, args);
             int n = std::get<runtime::String>(heap[args[0]]).value.size();
             int l = std::get<runtime::Integer>(heap[args[1]]).value;
@@ -2012,77 +2172,93 @@ private:
                 (0 <= l && l < n) &&
                 (0 <= r && r < n) &&
                 (l <= r)
-            )) {
+                )) {
                 utils::panic("runtime", "invalid substring range", sl);
             }
             return runtime::String(
                 std::get<runtime::String>(heap[args[0]]).value.substr(l, r - l)
             );
-        } else if (name == ".quote") {
+        }
+        else if (name == ".quote") {
             _typecheck<runtime::String>(sl, args);
             return runtime::String(
                 syntax::quote(std::get<runtime::String>(heap[args[0]]).value)
             );
-        } else if (name == ".unquote") {
+        }
+        else if (name == ".unquote") {
             _typecheck<runtime::String>(sl, args);
             return runtime::String(
                 syntax::unquote(std::get<runtime::String>(heap[args[0]]).value)
             );
-        } else if (name == ".s->i") {
+        }
+        else if (name == ".s->i") {
             _typecheck<runtime::String>(sl, args);
             return runtime::Integer(
                 std::stoi(std::get<runtime::String>(heap[args[0]]).value)  // TODO: exceptions
             );
-        } else if (name == ".i->s") {
+        }
+        else if (name == ".i->s") {
             _typecheck<runtime::Integer>(sl, args);
             return runtime::String(
                 std::to_string(std::get<runtime::Integer>(heap[args[0]]).value)
             );
-        } else if (name == ".type") {
+        }
+        else if (name == ".type") {
             _typecheck<runtime::Value>(sl, args);
             int label = -1;
             if (std::holds_alternative<runtime::Void>(heap[args[0]])) {
                 label = 0;
-            } else if (std::holds_alternative<runtime::Integer>(heap[args[0]])) {
+            }
+            else if (std::holds_alternative<runtime::Integer>(heap[args[0]])) {
                 label = 1;
-            } else if (std::holds_alternative<runtime::String>(heap[args[0]])) {
+            }
+            else if (std::holds_alternative<runtime::String>(heap[args[0]])) {
                 label = 2;
-            } else {
+            }
+            else {
                 label = 3;
             }
             return runtime::Integer(label);
-        } else if (name == ".eval") {
+        }
+        else if (name == ".eval") {
             _typecheck<runtime::String>(sl, args);
             State state(std::get<runtime::String>(heap[args[0]]).value);
             state.execute();
             return state.getResult();  // this should be a copy
-        } else if (name == ".getchar") {
+        }
+        else if (name == ".getchar") {
             _typecheck<>(sl, args);
             auto c = std::cin.get();
             if (std::cin.eof()) {
                 return runtime::Void();
-            } else {
+            }
+            else {
                 std::string s;
                 s.push_back(static_cast<char>(c));
                 return runtime::String(s);
             }
-        } else if (name == ".getint") {
+        }
+        else if (name == ".getint") {
             _typecheck<>(sl, args);
             int v;
             if (std::cin >> v) {
                 return runtime::Integer(v);
-            } else {
+            }
+            else {
                 return runtime::Void();
             }
-        } else if (name == ".putstr") {
+        }
+        else if (name == ".putstr") {
             _typecheck<runtime::String>(sl, args);
             std::cout << std::get<runtime::String>(heap[args[0]]).value;
             return runtime::Void();
-        } else if (name == ".flush") {
+        }
+        else if (name == ".flush") {
             _typecheck<>(sl, args);
             std::cout << std::flush;
             return runtime::Void();
-        } else {
+        }
+        else {
             _errorStack();
             utils::panic("runtime", "unrecognized intrinsic call", sl);
             // unreachable
@@ -2091,7 +2267,7 @@ private:
     }
     // memory management
     template <typename V, typename... Args>
-    requires utils::isAlternativeOf<V, runtime::Value>
+        requires utils::isAlternativeOf<V, runtime::Value>
     syntax::Location _new(Args&&... args) {
         heap.push_back(std::move(V(std::forward<Args>(args)...)));
         return heap.size() - 1;
@@ -2109,17 +2285,17 @@ private:
             if (!(visited.contains(loc))) {
                 visited.insert(loc);
                 if (std::holds_alternative<runtime::Closure>(heap[loc])) {
-                    for (const auto &[_, l] : std::get<runtime::Closure>(heap[loc]).env) {
+                    for (const auto& [_, l] : std::get<runtime::Closure>(heap[loc]).env) {
                         traverseLocation(l);
                     }
                 }
             }
-        };
+            };
         // traverse the stack
-        for (const auto &layer : stack) {
+        for (const auto& layer : stack) {
             // only frames "own" the environments
             if (layer.frame) {
-                for (const auto &[_, loc] : (*(layer.env))) {
+                for (const auto& [_, loc] : (*(layer.env))) {
                     traverseLocation(loc);
                 }
             }
@@ -2133,10 +2309,10 @@ private:
         return visited;
     }
     std::pair<int, std::unordered_map<syntax::Location, syntax::Location>>
-        _sweepAndCompact(const std::unordered_set<syntax::Location> &visited) {
+        _sweepAndCompact(const std::unordered_set<syntax::Location>& visited) {
         std::unordered_map<syntax::Location, syntax::Location> relocation;
         syntax::Location n = heap.size();
-        syntax::Location i{numLiterals}, j{numLiterals};
+        syntax::Location i{ numLiterals }, j{ numLiterals };
         while (j < n) {
             if (visited.contains(j)) {
                 if (i < j) {
@@ -2150,32 +2326,32 @@ private:
         heap.resize(i);
         return std::make_pair(n - i, std::move(relocation));
     }
-    void _relocate(const std::unordered_map<syntax::Location, syntax::Location> &relocation) {
-        auto reloc = [&relocation](syntax::Location &loc) -> void {
+    void _relocate(const std::unordered_map<syntax::Location, syntax::Location>& relocation) {
+        auto reloc = [&relocation](syntax::Location& loc) -> void {
             if (relocation.contains(loc)) {
                 loc = relocation.at(loc);
             }
-        };
+            };
         // traverse the stack
-        for (auto &layer : stack) {
+        for (auto& layer : stack) {
             // only frames "own" the environments
             if (layer.frame) {
-                for (auto &[_, loc] : (*(layer.env))) {
+                for (auto& [_, loc] : (*(layer.env))) {
                     reloc(loc);
                 }
             }
             // but each layer can still have locals
-            for (auto &v : layer.local) {
+            for (auto& v : layer.local) {
                 reloc(v);
             }
         }
         // traverse the resultLoc
         reloc(resultLoc);
         // traverse the closure values
-        for (auto &v : heap) {
+        for (auto& v : heap) {
             if (std::holds_alternative<runtime::Closure>(v)) {
-                auto &c = std::get<runtime::Closure>(v);
-                for (auto &[_, loc] : c.env) {
+                auto& c = std::get<runtime::Closure>(v);
+                for (auto& [_, loc] : c.env) {
                     reloc(loc);
                 }
             }
@@ -2183,17 +2359,18 @@ private:
     }
     int _gc() {
         auto visited = _mark();
-        const auto &[removed, relocation] = _sweepAndCompact(visited);
+        const auto& [removed, relocation] = _sweepAndCompact(visited);
         _relocate(relocation);
         return removed;
     }
     std::vector<utils::SourceLocation> _getFrameSLs() {
         std::vector<utils::SourceLocation> frameSLs;
-        for (const auto &l : stack) {
+        for (const auto& l : stack) {
             if (l.frame) {
                 if (l.expr == nullptr) {  // main frame
                     frameSLs.emplace_back(1, 1);
-                } else {
+                }
+                else {
                     frameSLs.push_back(l.expr->sl);
                 }
             }
@@ -2210,7 +2387,7 @@ private:
 
     // states
     std::string source;
-    syntax::ExprNode *expr;
+    syntax::ExprNode* expr;
     std::vector<runtime::Layer> stack;
     std::vector<runtime::Value> heap;
     int numLiterals = 0;
@@ -2221,7 +2398,7 @@ private:
 // main
 // ------------------------------
 
-std::string readSource(const std::string &spath) {
+std::string readSource(const std::string& spath) {
     if (!std::filesystem::exists(spath)) {
         throw std::runtime_error(spath + " does not exist.");
     }
@@ -2237,7 +2414,7 @@ std::string readSource(const std::string &spath) {
     return source;
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     if (argc != 2) {
         std::cerr << "Usage: " << argv[0] << " <source-path>\n";
         std::exit(EXIT_FAILURE);
@@ -2247,10 +2424,11 @@ int main(int argc, char **argv) {
         State state(std::move(source));
         state.execute();
         std::cout << "<end-of-stdout>\n"
-                  << serialization::valueToString(state.getResult(), state.getExpr()) << std::endl;
+            << serialization::valueToString(state.getResult(), state.getExpr()) << std::endl;
         std::cerr << "***** final state serialization *****\n"
-                  << '|' << state.serialize() << '|' << std::endl;
-    } catch (const std::runtime_error &e) {
+            << '|' << state.serialize() << '|' << std::endl;
+    }
+    catch (const std::runtime_error& e) {
         std::cerr << e.what() << std::endl;
         std::exit(EXIT_FAILURE);
     }
