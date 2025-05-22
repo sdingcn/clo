@@ -19,8 +19,10 @@
 #include <variant>
 #include <vector>
 
+namespace utils {
+
 // ------------------------------
-// global helper(s)
+// global utils
 // ------------------------------
 
 template <typename Type, typename Variant>
@@ -71,6 +73,10 @@ void panic(
     throw std::runtime_error("[" + type + " error " + sl.toString() + "] " + msg);
 }
 
+}  // namespace utils
+
+namespace syntax {
+
 // ------------------------------
 // lexer
 // ------------------------------
@@ -96,7 +102,7 @@ std::string unquote(std::string s) {
     if (!((n >= 2) &&
           (s[0] == '\"') &&
           (s[n - 1] == '\"'))) {
-        panic("unquote", "invalid quoted string");
+        utils::panic("unquote", "invalid quoted string");
     }
     s = s.substr(1, n - 2);
     std::reverse(s.begin(), s.end());
@@ -117,10 +123,10 @@ std::string unquote(std::string s) {
                 } else if (c1 == 'n') {
                     r += '\n';
                 } else {
-                    panic("unquote", "invalid escape sequence");
+                    utils::panic("unquote", "invalid escape sequence");
                 }
             } else {
-                panic("unquote", "incomplete escape sequence");
+                utils::panic("unquote", "incomplete escape sequence");
             }
         } else {
             r += c;
@@ -138,7 +144,7 @@ struct SourceStream {
         std::unordered_set<char> charset(charstr.begin(), charstr.end());
         for (char c : source) {
             if (!charset.contains(c)) {
-                panic("lexer", "unsupported character", sl);
+                utils::panic("lexer", "unsupported character", sl);
             }
             sl.update(c);
         }
@@ -158,18 +164,18 @@ struct SourceStream {
         sl.update(c);
         return c;
     }
-    SourceLocation getNextSourceLocation() const {
+    utils::SourceLocation getNextSourceLocation() const {
         return sl;
     }
 
     std::string source;
-    SourceLocation sl;
+    utils::SourceLocation sl;
 };
 
 struct Token {
-    Token(SourceLocation s, std::string t) : sl(s), text(std::move(t)) {}
+    Token(utils::SourceLocation s, std::string t) : sl(s), text(std::move(t)) {}
 
-    SourceLocation sl;
+    utils::SourceLocation sl;
     // for string literals, use the original (quoted) versions in the source stream
     std::string text;
 };
@@ -200,7 +206,7 @@ std::deque<Token> lex(std::string source) {
                 text += ss.popNext();
             }
             if (!hasDigit) {
-                panic("lexer", "incomplete integer literal", startsl);
+                utils::panic("lexer", "incomplete integer literal", startsl);
             }
         // string literal
         } else if (ss.peekNext() == '"') {
@@ -223,7 +229,7 @@ std::deque<Token> lex(std::string source) {
                 }
             }
             if (!complete) {
-                panic("lexer", "incomplete string literal", startsl);
+                utils::panic("lexer", "incomplete string literal", startsl);
             }
         // variable / keyword
         } else if (std::isalpha(ss.peekNext()) || ss.peekNext() == '_') {
@@ -252,7 +258,7 @@ std::deque<Token> lex(std::string source) {
             // nextToken() will consume the \n and recursively continue
             return nextToken();
         } else {
-            panic("lexer", "unsupported starting character", startsl);
+            utils::panic("lexer", "unsupported starting character", startsl);
         }
         return Token(startsl, std::move(text));
     };
@@ -287,7 +293,7 @@ enum class TraversalMode {
 struct ExprNode {
     DELETE_COPY(ExprNode);
     virtual ~ExprNode() {}
-    ExprNode(SourceLocation s): sl(s) {}
+    ExprNode(utils::SourceLocation s): sl(s) {}
 
     virtual ExprNode *clone() const = 0;
     virtual void traverse(
@@ -299,7 +305,7 @@ struct ExprNode {
     virtual void computeFreeVars() = 0;
     virtual void computeTail(bool parentTail) = 0;
 
-    SourceLocation sl;
+    utils::SourceLocation sl;
     // static information for free variables in the expression
     std::unordered_set<std::string> freeVars;
     // static information for tail position in the parent expression
@@ -313,7 +319,7 @@ using Location = int;
 struct IntegerNode : public ExprNode {
     DELETE_COPY(IntegerNode);
     virtual ~IntegerNode() {}
-    IntegerNode(SourceLocation s, std::string v): ExprNode(s), val(std::move(v)) {}
+    IntegerNode(utils::SourceLocation s, std::string v): ExprNode(s), val(std::move(v)) {}
 
     // covariant return type for override
     virtual IntegerNode *clone() const override {
@@ -346,7 +352,7 @@ struct IntegerNode : public ExprNode {
 struct StringNode : public ExprNode {
     DELETE_COPY(StringNode);
     virtual ~StringNode() {}
-    StringNode(SourceLocation s, std::string v): ExprNode(s), val(std::move(v)) {}
+    StringNode(utils::SourceLocation s, std::string v): ExprNode(s), val(std::move(v)) {}
 
     // covariant return type
     virtual StringNode *clone() const override {
@@ -378,7 +384,7 @@ struct StringNode : public ExprNode {
 struct VariableNode : public ExprNode {
     DELETE_COPY(VariableNode);
     virtual ~VariableNode() {}
-    VariableNode(SourceLocation s, std::string n): ExprNode(s), name(std::move(n)) {}
+    VariableNode(utils::SourceLocation s, std::string n): ExprNode(s), name(std::move(n)) {}
 
     virtual VariableNode *clone() const override {
         auto vnode = new VariableNode(sl, name);
@@ -413,7 +419,7 @@ struct LambdaNode : public ExprNode {
         }
         delete expr;
     }
-    LambdaNode(SourceLocation s, std::vector<VariableNode*> v, ExprNode *e):
+    LambdaNode(utils::SourceLocation s, std::vector<VariableNode*> v, ExprNode *e):
         ExprNode(s), varList(std::move(v)), expr(e) {}
 
     virtual LambdaNode *clone() const override {
@@ -487,7 +493,7 @@ struct LetrecNode : public ExprNode {
         }
         delete expr;
     }
-    LetrecNode(SourceLocation s, std::vector<std::pair<VariableNode*, ExprNode*>> v, ExprNode *e):
+    LetrecNode(utils::SourceLocation s, std::vector<std::pair<VariableNode*, ExprNode*>> v, ExprNode *e):
         ExprNode(s), varExprList(std::move(v)), expr(e) {}
 
     virtual LetrecNode *clone() const override {
@@ -568,7 +574,7 @@ struct IfNode : public ExprNode {
         delete branch1;
         delete branch2;
     }
-    IfNode(SourceLocation s, ExprNode *c, ExprNode *b1, ExprNode *b2):
+    IfNode(utils::SourceLocation s, ExprNode *c, ExprNode *b1, ExprNode *b2):
         ExprNode(s), cond(c), branch1(b1), branch2(b2) {}
 
     virtual IfNode *clone() const override {
@@ -626,7 +632,7 @@ struct SequenceNode : public ExprNode {
             delete e;
         }
     }
-    SequenceNode(SourceLocation s, std::vector<ExprNode*> e):
+    SequenceNode(utils::SourceLocation s, std::vector<ExprNode*> e):
         ExprNode(s), exprList(std::move(e)) {}
 
     virtual SequenceNode *clone() const override {
@@ -694,7 +700,7 @@ struct IntrinsicCallNode : public ExprNode {
             delete a;
         }
     }
-    IntrinsicCallNode(SourceLocation s, std::string i, std::vector<ExprNode*> a):
+    IntrinsicCallNode(utils::SourceLocation s, std::string i, std::vector<ExprNode*> a):
         ExprNode(s), intrinsic(std::move(i)), argList(std::move(a)) {}
 
     virtual IntrinsicCallNode *clone() const override {
@@ -759,7 +765,7 @@ struct ExprCallNode : public ExprNode {
             delete a;
         }
     }
-    ExprCallNode(SourceLocation s, ExprNode *e, std::vector<ExprNode*> a):
+    ExprCallNode(utils::SourceLocation s, ExprNode *e, std::vector<ExprNode*> a):
         ExprNode(s), expr(e), argList(std::move(a)) {}
 
     virtual ExprCallNode *clone() const override {
@@ -827,7 +833,7 @@ struct AtNode : public ExprNode {
         delete var;
         delete expr;
     }
-    AtNode(SourceLocation s, VariableNode *v, ExprNode *e): ExprNode(s), var(v), expr(e) {}
+    AtNode(utils::SourceLocation s, VariableNode *v, ExprNode *e): ExprNode(s), var(v), expr(e) {}
 
     virtual AtNode *clone() const override {
         // the evaluation order of the two clones are irrelevant
@@ -896,12 +902,12 @@ ExprNode *parse(std::deque<Token> tokens) {
     };
     auto consume = [&tokens]<typename Callable>(const Callable &predicate) -> Token {
         if (tokens.size() == 0) {
-            panic("parser", "incomplete token stream");
+            utils::panic("parser", "incomplete token stream");
         }
         auto token = tokens.front();
         tokens.pop_front();
         if (!predicate(token)) {
-            panic("parser", "unexpected token", token.sl);
+            utils::panic("parser", "unexpected token", token.sl);
         }
         return token;
     };
@@ -969,7 +975,7 @@ ExprNode *parse(std::deque<Token> tokens) {
             exprList.push_back(parseExpr());
         }
         if (!exprList.size()) {
-            panic("parser", "zero-length sequence", start.sl);
+            utils::panic("parser", "zero-length sequence", start.sl);
         }
         consume(isTheToken("}"));
         return new SequenceNode(start.sl, std::move(exprList));
@@ -1002,7 +1008,7 @@ ExprNode *parse(std::deque<Token> tokens) {
     };
     parseExpr = [&]() -> ExprNode* {
         if (!tokens.size()) {
-            panic("parser", "incomplete token stream");
+            utils::panic("parser", "incomplete token stream");
             // unreachable
             return nullptr;
         } else if (isIntegerToken(tokens[0])) {
@@ -1022,7 +1028,7 @@ ExprNode *parse(std::deque<Token> tokens) {
             return parseSequence();
         } else if (tokens[0].text == "(") {
             if (tokens.size() < 2) {
-                panic("parser", "incomplete token stream");
+                utils::panic("parser", "incomplete token stream");
                 // unreachable
                 return nullptr;
             }
@@ -1034,7 +1040,7 @@ ExprNode *parse(std::deque<Token> tokens) {
         } else if (tokens[0].text == "@") {
             return parseAt();
         } else {
-            panic("parser", "unrecognized token", tokens[0].sl);
+            utils::panic("parser", "unrecognized token", tokens[0].sl);
             // unreachable
             return nullptr;
         }
@@ -1044,32 +1050,105 @@ ExprNode *parse(std::deque<Token> tokens) {
     return expr;
 }
 
-std::vector<int> encodeNodePath(const ExprNode *node, const ExprNode *root) {
+}  // namespace syntax
+
+namespace runtime {
+
+// ------------------------------
+// runtime values (those things can be copied (including pointer members))
+// ------------------------------
+
+struct Void {
+    Void() = default;
+};
+
+struct Integer {
+    Integer(int v): value(v) {}
+
+    int value = 0;
+};
+
+struct String {  // for string literals, this class contains the unquoted ones
+    String(std::string v): value(std::move(v)) {}
+
+    std::string value;
+};
+
+// variable environment; newer variables have larger indices
+using Env = std::vector<std::pair<std::string, syntax::Location>>;
+
+std::optional<syntax::Location> lookup(const std::string &name, const Env &env) {
+    for (auto p = env.rbegin(); p != env.rend(); p++) {
+        if (p->first == name) {
+            return p->second;
+        }
+    }
+    return std::nullopt;
+}
+
+struct Closure {
+    // a closure should copy its environment
+    Closure(Env e, const syntax::LambdaNode *f): env(std::move(e)), fun(f) {}
+
+    Env env;
+    const syntax::LambdaNode *fun;
+};
+
+using Value = std::variant<Void, Integer, String, Closure>;
+
+// stack layer
+
+struct Layer {
+    // a default argument is evaluated each time the function is called without
+    // that argument (not important here)
+    Layer(std::shared_ptr<Env> e = nullptr, const syntax::ExprNode *x = nullptr, bool f = false):
+        env(std::move(e)), expr(x), frame(f) {}
+    
+    Layer(std::string) {
+        // TODO: deserialize
+    }
+
+    // whether this is a frame
+    bool frame;
+    // one env per frame (closure call layer)
+    std::shared_ptr<Env> env;
+    const syntax::ExprNode *expr;
+    // program counter inside this expr
+    int pc = 0;
+    // temporary local information for evaluation
+    std::vector<syntax::Location> local;
+};
+
+}  // namespace runtime
+
+namespace serialization {
+
+std::vector<int> encodeNodePath(const syntax::ExprNode *node, const syntax::ExprNode *root) {
     if (node == nullptr) {
-        panic("serialization", "node is nullptr");
+        utils::panic("serialization", "node is nullptr");
         // unreachable
         return std::vector<int>();
     }
     if (root == nullptr) {
-        panic("serialization", "root is nullptr");
+        utils::panic("serialization", "root is nullptr");
         // unreachable
         return std::vector<int>();
     }
     std::vector<int> nodePath;
-    std::function<bool(std::vector<int>&, const ExprNode*)>
-        findPath = [&](std::vector<int> &curPath, const ExprNode *curNode) -> bool {
+    std::function<bool(std::vector<int>&, const syntax::ExprNode*)>
+        findPath = [&](std::vector<int> &curPath, const syntax::ExprNode *curNode) -> bool {
         if (curNode == node) {
             // copy
             nodePath = curPath;
             return true;
         } else {
-            if (auto inode = dynamic_cast<const IntegerNode*>(curNode)) {
+            if (auto inode = dynamic_cast<const syntax::IntegerNode*>(curNode)) {
                 return false;
-            } else if (auto snode = dynamic_cast<const StringNode*>(curNode)) {
+            } else if (auto snode = dynamic_cast<const syntax::StringNode*>(curNode)) {
                 return false;
-            } else if (auto vnode = dynamic_cast<const VariableNode*>(curNode)) {
+            } else if (auto vnode = dynamic_cast<const syntax::VariableNode*>(curNode)) {
                 return false;
-            } else if (auto lnode = dynamic_cast<const LambdaNode*>(curNode)) {
+            } else if (auto lnode = dynamic_cast<const syntax::LambdaNode*>(curNode)) {
                 int numArgs = lnode->varList.size();
                 for (int i = 0; i < numArgs; i++) {
                     curPath.push_back(i);
@@ -1084,7 +1163,7 @@ std::vector<int> encodeNodePath(const ExprNode *node, const ExprNode *root) {
                 }
                 curPath.pop_back();
                 return false;
-            } else if (auto lnode = dynamic_cast<const LetrecNode*>(curNode)) {
+            } else if (auto lnode = dynamic_cast<const syntax::LetrecNode*>(curNode)) {
                 int numVars = lnode->varExprList.size();
                 for (int i = 0; i < numVars; i++) {
                     curPath.push_back(2 * i);
@@ -1104,7 +1183,7 @@ std::vector<int> encodeNodePath(const ExprNode *node, const ExprNode *root) {
                 }
                 curPath.pop_back();
                 return false;
-            } else if (auto inode = dynamic_cast<const IfNode*>(curNode)) {
+            } else if (auto inode = dynamic_cast<const syntax::IfNode*>(curNode)) {
                 curPath.push_back(0);
                 if (findPath(curPath, inode->cond)) {
                     return true;
@@ -1121,7 +1200,7 @@ std::vector<int> encodeNodePath(const ExprNode *node, const ExprNode *root) {
                 }
                 curPath.pop_back();
                 return false;
-            } else if (auto snode = dynamic_cast<const SequenceNode*>(curNode)) {
+            } else if (auto snode = dynamic_cast<const syntax::SequenceNode*>(curNode)) {
                 int numExprs = snode->exprList.size();
                 for (int i = 0; i < numExprs; i++) {
                     curPath.push_back(i);
@@ -1131,7 +1210,7 @@ std::vector<int> encodeNodePath(const ExprNode *node, const ExprNode *root) {
                     curPath.pop_back();
                 }
                 return false;
-            } else if (auto inode = dynamic_cast<const IntrinsicCallNode*>(curNode)) {
+            } else if (auto inode = dynamic_cast<const syntax::IntrinsicCallNode*>(curNode)) {
                 int numArgs = inode->argList.size();
                 for (int i = 0; i < numArgs; i++) {
                     curPath.push_back(i);
@@ -1141,7 +1220,7 @@ std::vector<int> encodeNodePath(const ExprNode *node, const ExprNode *root) {
                     curPath.pop_back();
                 }
                 return false;
-            } else if (auto enode = dynamic_cast<const ExprCallNode*>(curNode)) {
+            } else if (auto enode = dynamic_cast<const syntax::ExprCallNode*>(curNode)) {
                 curPath.push_back(0);
                 if (findPath(curPath, enode->expr)) {
                     return true;
@@ -1156,7 +1235,7 @@ std::vector<int> encodeNodePath(const ExprNode *node, const ExprNode *root) {
                     curPath.pop_back();
                 }
                 return false;
-            } else if (auto anode = dynamic_cast<const AtNode*>(curNode)) {
+            } else if (auto anode = dynamic_cast<const syntax::AtNode*>(curNode)) {
                 curPath.push_back(0);
                 if (findPath(curPath, anode->var)) {
                     return true;
@@ -1169,7 +1248,7 @@ std::vector<int> encodeNodePath(const ExprNode *node, const ExprNode *root) {
                 curPath.pop_back();
                 return false;
             } else {
-                panic("serialization", "unrecognized AST node");
+                utils::panic("serialization", "unrecognized AST node");
                 // unreachable
                 return false;
             }
@@ -1179,22 +1258,22 @@ std::vector<int> encodeNodePath(const ExprNode *node, const ExprNode *root) {
     if (findPath(currentPath, root)) {
         return nodePath;
     } else {
-        panic("serialization", "node not found", node->sl);
+        utils::panic("serialization", "node not found", node->sl);
         // unreachable
         return std::vector<int>();
     }
 }
 
-const ExprNode *decodeNodePath(const std::vector<int> &path, const ExprNode *root) {
-    const ExprNode *curNode = root;
+const syntax::ExprNode *decodeNodePath(const std::vector<int> &path, const syntax::ExprNode *root) {
+    const syntax::ExprNode *curNode = root;
     for (int i : path) {
-        if (auto inode = dynamic_cast<const IntegerNode*>(curNode)) {
+        if (auto inode = dynamic_cast<const syntax::IntegerNode*>(curNode)) {
             return nullptr;
-        } else if (auto snode = dynamic_cast<const StringNode*>(curNode)) {
+        } else if (auto snode = dynamic_cast<const syntax::StringNode*>(curNode)) {
             return nullptr;
-        } else if (auto vnode = dynamic_cast<const VariableNode*>(curNode)) {
+        } else if (auto vnode = dynamic_cast<const syntax::VariableNode*>(curNode)) {
             return nullptr;
-        } else if (auto lnode = dynamic_cast<const LambdaNode*>(curNode)) {
+        } else if (auto lnode = dynamic_cast<const syntax::LambdaNode*>(curNode)) {
             int numArgs = lnode->varList.size();
             if (i < numArgs) {
                 curNode = lnode->varList[i];
@@ -1203,7 +1282,7 @@ const ExprNode *decodeNodePath(const std::vector<int> &path, const ExprNode *roo
             } else {
                 return nullptr;
             }
-        } else if (auto lnode = dynamic_cast<const LetrecNode*>(curNode)) {
+        } else if (auto lnode = dynamic_cast<const syntax::LetrecNode*>(curNode)) {
             int numVars = lnode->varExprList.size();
             if (i < numVars * 2) {
                 int index = i / 2;
@@ -1218,7 +1297,7 @@ const ExprNode *decodeNodePath(const std::vector<int> &path, const ExprNode *roo
             } else {
                 return nullptr;
             }
-        } else if (auto inode = dynamic_cast<const IfNode*>(curNode)) {
+        } else if (auto inode = dynamic_cast<const syntax::IfNode*>(curNode)) {
             if (i == 0) {
                 curNode = inode->cond;
             } else if (i == 1) {
@@ -1228,21 +1307,21 @@ const ExprNode *decodeNodePath(const std::vector<int> &path, const ExprNode *roo
             } else {
                 return nullptr;
             }
-        } else if (auto snode = dynamic_cast<const SequenceNode*>(curNode)) {
+        } else if (auto snode = dynamic_cast<const syntax::SequenceNode*>(curNode)) {
             int numExprs = snode->exprList.size();
             if (i < numExprs) {
                 curNode = snode->exprList[i];
             } else {
                 return nullptr;
             }
-        } else if (auto inode = dynamic_cast<const IntrinsicCallNode*>(curNode)) {
+        } else if (auto inode = dynamic_cast<const syntax::IntrinsicCallNode*>(curNode)) {
             int numArgs = inode->argList.size();
             if (i < numArgs) {
                 curNode = inode->argList[i];
             } else {
                 return nullptr;
             }
-        } else if (auto enode = dynamic_cast<const ExprCallNode*>(curNode)) {
+        } else if (auto enode = dynamic_cast<const syntax::ExprCallNode*>(curNode)) {
             if (i == 0) {
                 curNode = enode->expr;
             } else {
@@ -1253,7 +1332,7 @@ const ExprNode *decodeNodePath(const std::vector<int> &path, const ExprNode *roo
                     return nullptr;
                 }
             }
-        } else if (auto anode = dynamic_cast<const AtNode*>(curNode)) {
+        } else if (auto anode = dynamic_cast<const syntax::AtNode*>(curNode)) {
             if (i == 0) {
                 curNode = anode->var;
             } else if (i == 1) {
@@ -1262,7 +1341,7 @@ const ExprNode *decodeNodePath(const std::vector<int> &path, const ExprNode *roo
                 return nullptr;
             }
         } else {
-            panic("serialization", "unrecognized AST node");
+            utils::panic("serialization", "unrecognized AST node");
         }
     }
     return curNode;
@@ -1285,42 +1364,7 @@ Path stringToPath(const std::string &s) {
     return Path();
 }
 
-// ------------------------------
-// runtime
-// ------------------------------
-
-struct Void {
-    Void() = default;
-
-    std::string toString() const {
-        return "<void>";
-    }
-};
-
-struct Integer {
-    Integer(int v): value(v) {}
-
-    std::string toString() const {
-        return std::to_string(value);
-    }
-
-    int value = 0;
-};
-
-struct String {  // for string literals, this class contains the unquoted ones
-    String(std::string v): value(std::move(v)) {}
-
-    std::string toString() const {
-        return quote(value);
-    }
-
-    std::string value;
-};
-
-// variable environment; newer variables have larger indices
-using Env = std::vector<std::pair<std::string, Location>>;
-
-std::string envToString(const Env &env) {
+std::string envToString(const runtime::Env &env) {
     std::string s = "[";
     for (auto &p : env) {
         s += " ";
@@ -1332,151 +1376,115 @@ std::string envToString(const Env &env) {
     return s;
 }
 
-Env stringToEnv(const std::string &s) {
+runtime::Env stringToEnv(const std::string &s) {
     // TODO
-    return Env();
+    return runtime::Env();
 }
 
-std::optional<Location> lookup(const std::string &name, const Env &env) {
-    for (auto p = env.rbegin(); p != env.rend(); p++) {
-        if (p->first == name) {
-            return p->second;
-        }
-    }
-    return std::nullopt;
-}
-
-struct Closure {
-    // a closure should copy its environment
-    Closure(Env e, const LambdaNode *f): env(std::move(e)), fun(f) {}
-
-    std::string toString(const ExprNode *root) const {
-        std::string s = envToString(env);
+std::string valueToString(const runtime::Value &v, const syntax::ExprNode *root) {
+    if (std::holds_alternative<runtime::Void>(v)) {
+        return "<void>";
+    } else if (std::holds_alternative<runtime::Integer>(v)) {
+        auto i = std::get<runtime::Integer>(v);
+        return std::to_string(i.value);
+    } else if (std::holds_alternative<runtime::String>(v)) {
+        auto s = std::get<runtime::String>(v);
+        return syntax::quote(s.value);
+    } else {
+        auto c = std::get<runtime::Closure>(v);
+        std::string s = envToString(c.env);
         s += " ";
-        s += pathToString(encodeNodePath(fun, root));
+        s += pathToString(encodeNodePath(c.fun, root));
         return s;
     }
-
-    Env env;
-    const LambdaNode *fun;
-};
-
-using Value = std::variant<Void, Integer, String, Closure>;
-
-std::string valueToString(const Value &v, const ExprNode *root) {
-    if (std::holds_alternative<Void>(v)) {
-        return std::get<Void>(v).toString();
-    } else if (std::holds_alternative<Integer>(v)) {
-        return std::get<Integer>(v).toString();
-    } else if (std::holds_alternative<String>(v)) {
-        return std::get<String>(v).toString();
-    } else {
-        return std::get<Closure>(v).toString(root);
-    }
 }
 
-Value stringToValue(const std::string &s) {
+runtime::Value stringToValue(const std::string &s) {
     // TODO
-    return Void();
+    return runtime::Void();
 }
 
-// stack layer
-
-struct Layer {
-    // a default argument is evaluated each time the function is called without
-    // that argument (not important here)
-    Layer(std::shared_ptr<Env> e, const ExprNode *x, bool f = false):
-        env(std::move(e)), expr(x), frame(f) {}
-    
-    Layer(std::string) {
-        // TODO: deserialize
+std::string layerToString(const runtime::Layer &layer, const syntax::ExprNode *root) {
+    std::string serialized_layer;
+    // bool frame;
+    if (layer.frame) {
+        serialized_layer += "frame";
+    } else {
+        serialized_layer += "nonframe";
     }
-
-    std::string serialize(const ExprNode *root) const {
-        std::string serialized_layer;
-        // bool frame;
-        if (frame) {
-            serialized_layer += "frame";
-        } else {
-            serialized_layer += "nonframe";
-        }
-        // std::shared_ptr<Env> env;
-        if (frame) {
-            serialized_layer += " ";
-            serialized_layer += envToString(*env);
-        }
-        // const ExprNode *expr;
+    // std::shared_ptr<Env> env;
+    if (layer.frame) {
         serialized_layer += " ";
-        if (expr != nullptr) {
-            serialized_layer += pathToString(encodeNodePath(expr, root));
-        } else {
-            serialized_layer += "[ -1 ]";
-        }
-        // int pc = 0;
-        serialized_layer += " ";
-        serialized_layer += std::to_string(pc);
-        // std::vector<Location> local;
-        serialized_layer += " [";
-        for (auto &l : local) {
-            serialized_layer += " ";
-            serialized_layer += std::to_string(l);
-        }
-        serialized_layer += " ]";
-        return serialized_layer;
+        serialized_layer += envToString(*(layer.env));
     }
+    // const syntax::ExprNode *expr;
+    serialized_layer += " ";
+    if (layer.expr != nullptr) {
+        serialized_layer += pathToString(encodeNodePath(layer.expr, root));
+    } else {
+        serialized_layer += "[ -1 ]";
+    }
+    // int pc = 0;
+    serialized_layer += " ";
+    serialized_layer += std::to_string(layer.pc);
+    // std::vector<Location> local;
+    serialized_layer += " [";
+    for (auto &l : layer.local) {
+        serialized_layer += " ";
+        serialized_layer += std::to_string(l);
+    }
+    serialized_layer += " ]";
+    return serialized_layer;
+}
 
-    // whether this is a frame
-    bool frame;
-    // one env per frame (closure call layer)
-    std::shared_ptr<Env> env;
-    const ExprNode *expr;
-    // program counter inside this expr
-    int pc = 0;
-    // temporary local information for evaluation
-    std::vector<Location> local;
-};
+runtime::Layer stringToLayer(const std::string &str, const syntax::ExprNode *root) {
+    // TODO
+    return runtime::Layer();
+}
+
+}  // namespace serialization
 
 class State {
 public:
     State(std::string src) {
         source = std::move(src);
         // parsing and static analysis (TODO: exceptions?)
-        expr = parse(lex(source));
-        std::function<void(ExprNode*)> checkDuplicate = [](ExprNode *e) -> void {
-            if (auto lnode = dynamic_cast<LambdaNode*>(e)) {
+        expr = syntax::parse(syntax::lex(source));
+        std::function<void(syntax::ExprNode*)> checkDuplicate = [](syntax::ExprNode *e) -> void {
+            if (auto lnode = dynamic_cast<syntax::LambdaNode*>(e)) {
                 std::unordered_set<std::string> varNames;
                 for (auto var : lnode->varList) {
                     if (varNames.contains(var->name)) {
-                        panic("sema", "duplicate parameter names", lnode->sl);
+                        utils::panic("sema", "duplicate parameter names", lnode->sl);
                     }
                     varNames.insert(var->name);
                 }
-            } else if (auto lnode = dynamic_cast<LetrecNode*>(e)) {
+            } else if (auto lnode = dynamic_cast<syntax::LetrecNode*>(e)) {
                 std::unordered_set<std::string> varNames;
                 for (const auto &ve : lnode->varExprList) {
                     if (varNames.contains(ve.first->name)) {
-                        panic("sema", "duplicate binding names", lnode->sl);
+                        utils::panic("sema", "duplicate binding names", lnode->sl);
                     }
                     varNames.insert(ve.first->name);
                 }
             }
         };
-        expr->traverse(TraversalMode::TOP_DOWN, checkDuplicate);
+        expr->traverse(syntax::TraversalMode::TOP_DOWN, checkDuplicate);
         expr->computeFreeVars();
         expr->computeTail(false);
         // pre-allocate integer literals and string literals
-        std::function<void(ExprNode*)> preAllocate = [this](ExprNode *e) -> void {
-            if (auto inode = dynamic_cast<IntegerNode*>(e)) {
+        std::function<void(syntax::ExprNode*)> preAllocate = [this](syntax::ExprNode *e) -> void {
+            if (auto inode = dynamic_cast<syntax::IntegerNode*>(e)) {
                 // TODO: exceptions
-                inode->loc = this->_new<Integer>(std::stoi(inode->val));
-            } else if (auto snode = dynamic_cast<StringNode*>(e)) {
-                snode->loc = this->_new<String>(unquote(snode->val));
+                inode->loc = this->_new<runtime::Integer>(std::stoi(inode->val));
+            } else if (auto snode = dynamic_cast<syntax::StringNode*>(e)) {
+                snode->loc = this->_new<runtime::String>(syntax::unquote(snode->val));
             }
         };
-        expr->traverse(TraversalMode::TOP_DOWN, preAllocate);
+        expr->traverse(syntax::TraversalMode::TOP_DOWN, preAllocate);
         numLiterals = heap.size();
         // the main frame (which cannot be removed by TCO)
-        stack.emplace_back(std::make_shared<Env>(), nullptr, true);
+        stack.emplace_back(std::make_shared<runtime::Env>(), nullptr, true);
         // the first expression (using the env of the main frame)
         stack.emplace_back(stack.back().env, expr);
     }
@@ -1538,24 +1546,24 @@ public:
             return false;
         }
         // evaluations for every case
-        if (auto inode = dynamic_cast<const IntegerNode*>(layer.expr)) {
+        if (auto inode = dynamic_cast<const syntax::IntegerNode*>(layer.expr)) {
             resultLoc = inode->loc;
             stack.pop_back();
-        } else if (auto snode = dynamic_cast<const StringNode*>(layer.expr)) {
+        } else if (auto snode = dynamic_cast<const syntax::StringNode*>(layer.expr)) {
             resultLoc = snode->loc;
             stack.pop_back();
-        } else if (auto vnode = dynamic_cast<const VariableNode*>(layer.expr)) {
+        } else if (auto vnode = dynamic_cast<const syntax::VariableNode*>(layer.expr)) {
             auto varName = vnode->name;
-            auto loc = lookup(varName, *(layer.env));
+            auto loc = runtime::lookup(varName, *(layer.env));
             if (!loc.has_value()) {
                 _errorStack();
-                panic("runtime", "undefined variable " + varName, layer.expr->sl);
+                utils::panic("runtime", "undefined variable " + varName, layer.expr->sl);
             }
             resultLoc = loc.value();
             stack.pop_back();
-        } else if (auto lnode = dynamic_cast<const LambdaNode*>(layer.expr)) {
+        } else if (auto lnode = dynamic_cast<const syntax::LambdaNode*>(layer.expr)) {
             // copy the statically used part of the env into the closure
-            Env savedEnv;
+            runtime::Env savedEnv;
             // copy
             auto usedVars = lnode->freeVars;
             for (auto ptr = layer.env->rbegin(); ptr != layer.env->rend(); ptr++) {
@@ -1568,20 +1576,20 @@ public:
                 }
             }
             std::reverse(savedEnv.begin(), savedEnv.end());
-            resultLoc = _new<Closure>(savedEnv, lnode);
+            resultLoc = _new<runtime::Closure>(savedEnv, lnode);
             stack.pop_back();
-        } else if (auto lnode = dynamic_cast<const LetrecNode*>(layer.expr)) {
+        } else if (auto lnode = dynamic_cast<const syntax::LetrecNode*>(layer.expr)) {
             // unified argument recording
             if (layer.pc > 1 && layer.pc <= static_cast<int>(lnode->varExprList.size()) + 1) {
                 auto varName = lnode->varExprList[layer.pc - 2].first->name;
-                auto loc = lookup(
+                auto loc = runtime::lookup(
                     varName,
                     *(layer.env)
                 );
                 // this shouldn't happen since those variables are newly introduced by letrec
                 if (!loc.has_value()) {
                     _errorStack();
-                    panic("runtime", "undefined variable " + varName, layer.expr->sl);
+                    utils::panic("runtime", "undefined variable " + varName, layer.expr->sl);
                 }
                 // copy (inherited resultLoc)
                 heap[loc.value()] = heap[resultLoc];
@@ -1592,7 +1600,7 @@ public:
                 for (const auto &[var, _] : lnode->varExprList) {
                     layer.env->push_back(std::make_pair(
                         var->name,
-                        _new<Void>()
+                        _new<runtime::Void>()
                     ));
                 }
             // evaluate bindings
@@ -1621,7 +1629,7 @@ public:
                 // no need to update resultLoc: inherited from body evaluation
                 stack.pop_back();
             }
-        } else if (auto inode = dynamic_cast<const IfNode*>(layer.expr)) {
+        } else if (auto inode = dynamic_cast<const syntax::IfNode*>(layer.expr)) {
             // evaluate condition
             if (layer.pc == 0) {
                 layer.pc++;
@@ -1630,11 +1638,11 @@ public:
             } else if (layer.pc == 1) {
                 layer.pc++;
                 // inherited condition value
-                if (!std::holds_alternative<Integer>(heap[resultLoc])) {
+                if (!std::holds_alternative<runtime::Integer>(heap[resultLoc])) {
                     _errorStack();
-                    panic("runtime", "wrong cond type", layer.expr->sl);
+                    utils::panic("runtime", "wrong cond type", layer.expr->sl);
                 }
-                if (std::get<Integer>(heap[resultLoc]).value) {
+                if (std::get<runtime::Integer>(heap[resultLoc]).value) {
                     stack.emplace_back(layer.env, inode->branch1);
                 } else {
                     stack.emplace_back(layer.env, inode->branch2);
@@ -1644,7 +1652,7 @@ public:
                 // no need to update resultLoc: inherited
                 stack.pop_back();
             }
-        } else if (auto snode = dynamic_cast<const SequenceNode*>(layer.expr)) {
+        } else if (auto snode = dynamic_cast<const syntax::SequenceNode*>(layer.expr)) {
             // evaluate one-by-one
             if (layer.pc < static_cast<int>(snode->exprList.size())) {
                 layer.pc++;
@@ -1658,7 +1666,7 @@ public:
                 // no need to update resultLoc: inherited
                 stack.pop_back();
             }
-        } else if (auto inode = dynamic_cast<const IntrinsicCallNode*>(layer.expr)) {
+        } else if (auto inode = dynamic_cast<const syntax::IntrinsicCallNode*>(layer.expr)) {
             // unified argument recording
             if (layer.pc > 0 && layer.pc <= static_cast<int>(inode->argList.size())) {
                 layer.local.push_back(resultLoc);
@@ -1681,7 +1689,7 @@ public:
                 resultLoc = _moveNew(std::move(value));
                 stack.pop_back();
             }
-        } else if (auto enode = dynamic_cast<const ExprCallNode*>(layer.expr)) {
+        } else if (auto enode = dynamic_cast<const syntax::ExprCallNode*>(layer.expr)) {
             // unified argument recording
             if (layer.pc > 2 && layer.pc <= static_cast<int>(enode->argList.size()) + 2) {
                 layer.local.push_back(resultLoc);
@@ -1709,18 +1717,18 @@ public:
             } else if (layer.pc == static_cast<int>(enode->argList.size()) + 2) {
                 layer.pc++;
                 auto exprLoc = layer.local[0];
-                if (!std::holds_alternative<Closure>(heap[exprLoc])) {
+                if (!std::holds_alternative<runtime::Closure>(heap[exprLoc])) {
                     _errorStack();
-                    panic("runtime", "calling a non-callable", layer.expr->sl);
+                    utils::panic("runtime", "calling a non-callable", layer.expr->sl);
                 }
-                auto &closure = std::get<Closure>(heap[exprLoc]);
+                auto &closure = std::get<runtime::Closure>(heap[exprLoc]);
                 // types will be checked inside the closure call
                 if (
                     static_cast<int>(layer.local.size()) - 1 !=
                     static_cast<int>(closure.fun->varList.size())
                 ) {
                     _errorStack();
-                    panic("runtime", "wrong number of arguments", layer.expr->sl);
+                    utils::panic("runtime", "wrong number of arguments", layer.expr->sl);
                 }
                 int nArgs = static_cast<int>(closure.fun->varList.size());
                 // lexical scope: copy the env from the closure definition place
@@ -1743,7 +1751,7 @@ public:
                 // evaluation of the closure body
                 stack.emplace_back(
                     // new frame has new env
-                    std::make_shared<Env>(std::move(newEnv)),
+                    std::make_shared<runtime::Env>(std::move(newEnv)),
                     closure.fun->expr,
                     true
                 );
@@ -1752,25 +1760,25 @@ public:
                 // no need to update resultLoc: inherited
                 stack.pop_back();
             }
-        } else if (auto anode = dynamic_cast<const AtNode*>(layer.expr)) {
+        } else if (auto anode = dynamic_cast<const syntax::AtNode*>(layer.expr)) {
             // evaluate the expr
             if (layer.pc == 0) {
                 layer.pc++;
                 stack.emplace_back(layer.env, anode->expr);
             } else {
                 // inherited resultLoc
-                if (!std::holds_alternative<Closure>(heap[resultLoc])) {
+                if (!std::holds_alternative<runtime::Closure>(heap[resultLoc])) {
                     _errorStack();
-                    panic("runtime", "@ wrong type", layer.expr->sl);
+                    utils::panic("runtime", "@ wrong type", layer.expr->sl);
                 }
                 auto varName = anode->var->name;
-                auto loc = lookup(
+                auto loc = runtime::lookup(
                     varName,
-                    std::get<Closure>(heap[resultLoc]).env
+                    std::get<runtime::Closure>(heap[resultLoc]).env
                 );
                 if (!loc.has_value()) {
                     _errorStack();
-                    panic("runtime", "undefined variable " + varName, layer.expr->sl);
+                    utils::panic("runtime", "undefined variable " + varName, layer.expr->sl);
                 }
                 // "access by reference"
                 resultLoc = loc.value();
@@ -1778,7 +1786,7 @@ public:
             }
         } else {
             _errorStack();
-            panic("runtime", "unrecognized AST node", layer.expr->sl);
+            utils::panic("runtime", "unrecognized AST node", layer.expr->sl);
         }
         return true;
     }
@@ -1796,29 +1804,29 @@ public:
             }
         }
     }
-    const Value &getResult() const {
+    const runtime::Value &getResult() const {
         return heap[resultLoc];
     }
-    const ExprNode *getExpr() const {
+    const syntax::ExprNode *getExpr() const {
         return expr;
     }
     std::string serialize() const {
         std::string serialized_state;
         // std::string source;
         serialized_state += source;
-        // (skipped, because source is more accurate) ExprNode *expr;
+        // (skipped, because source is more accurate) syntax::ExprNode *expr;
         // std::vector<Layer> stack;
         serialized_state += " [";
         for (auto &layer : stack) {
             serialized_state += " ";
-            serialized_state += layer.serialize(expr);
+            serialized_state += serialization::layerToString(layer, expr);
         }
         serialized_state += " ]";
         // std::vector<Value> heap;
         serialized_state += " [";
         for (auto &value : heap) {
             serialized_state += " ";
-            serialized_state += valueToString(value, expr);
+            serialized_state += serialization::valueToString(value, expr);
         }
         serialized_state += " ]";
         // int numLiterals = 0;
@@ -1831,14 +1839,14 @@ public:
     }
 private:
     template <typename... Alt>
-    requires (true && ... && (std::same_as<Alt, Value> || isAlternativeOf<Alt, Value>))
-    void _typecheck(SourceLocation sl, const std::vector<Location> &args) {
+    requires (true && ... && (std::same_as<Alt, runtime::Value> || utils::isAlternativeOf<Alt, runtime::Value>))
+    void _typecheck(utils::SourceLocation sl, const std::vector<syntax::Location> &args) {
         bool ok = args.size() == sizeof...(Alt);
         int i = -1;
         ok = ok && (true && ... && (
             i++,
             [&] {
-                if constexpr (std::same_as<Alt, Value>) {
+                if constexpr (std::same_as<Alt, runtime::Value>) {
                     return true;
                 } else {
                     return std::holds_alternative<Alt>(heap[args[i]]);
@@ -1847,259 +1855,261 @@ private:
         ));
         if (!ok) {
             _errorStack();
-            panic("runtime", "type error on intrinsic call", sl);
+            utils::panic("runtime", "type error on intrinsic call", sl);
         }
     }
     // intrinsic dispatch
-    Value _callIntrinsic(
-        SourceLocation sl, const std::string &name, const std::vector<Location> &args
+    runtime::Value _callIntrinsic(
+        utils::SourceLocation sl, const std::string &name, const std::vector<syntax::Location> &args
     ) {
         if (name == ".void") {
             _typecheck<>(sl, args);
-            return Void();
+            return runtime::Void();
         } else if (name == ".+") {
-            _typecheck<Integer, Integer>(sl, args);
-            return Integer(
-                std::get<Integer>(heap[args[0]]).value +
-                std::get<Integer>(heap[args[1]]).value
+            _typecheck<runtime::Integer, runtime::Integer>(sl, args);
+            return runtime::Integer(
+                std::get<runtime::Integer>(heap[args[0]]).value +
+                std::get<runtime::Integer>(heap[args[1]]).value
             );
         } else if (name == ".-") {
-            _typecheck<Integer, Integer>(sl, args);
-            return Integer(
-                std::get<Integer>(heap[args[0]]).value -
-                std::get<Integer>(heap[args[1]]).value
+            _typecheck<runtime::Integer, runtime::Integer>(sl, args);
+            return runtime::Integer(
+                std::get<runtime::Integer>(heap[args[0]]).value -
+                std::get<runtime::Integer>(heap[args[1]]).value
             );
         } else if (name == ".*") {
-            _typecheck<Integer, Integer>(sl, args);
-            return Integer(
-                std::get<Integer>(heap[args[0]]).value *
-                std::get<Integer>(heap[args[1]]).value
+            _typecheck<runtime::Integer, runtime::Integer>(sl, args);
+            return runtime::Integer(
+                std::get<runtime::Integer>(heap[args[0]]).value *
+                std::get<runtime::Integer>(heap[args[1]]).value
             );
         } else if (name == "./") {
-            _typecheck<Integer, Integer>(sl, args);
-            int d = std::get<Integer>(heap[args[1]]).value;
+            _typecheck<runtime::Integer, runtime::Integer>(sl, args);
+            int d = std::get<runtime::Integer>(heap[args[1]]).value;
             if (d == 0) {
-                panic("runtime", "division by zero", sl);
+                utils::panic("runtime", "division by zero", sl);
             }
-            return Integer(
-                std::get<Integer>(heap[args[0]]).value /
+            return runtime::Integer(
+                std::get<runtime::Integer>(heap[args[0]]).value /
                 d
             );
         } else if (name == ".%") {
-            _typecheck<Integer, Integer>(sl, args);
-            int d = std::get<Integer>(heap[args[1]]).value;
+            _typecheck<runtime::Integer, runtime::Integer>(sl, args);
+            int d = std::get<runtime::Integer>(heap[args[1]]).value;
             if (d == 0) {
-                panic("runtime", "division by zero", sl);
+                utils::panic("runtime", "division by zero", sl);
             }
-            return Integer(
-                std::get<Integer>(heap[args[0]]).value %
+            return runtime::Integer(
+                std::get<runtime::Integer>(heap[args[0]]).value %
                 d
             );
         } else if (name == ".<") {
-            _typecheck<Integer, Integer>(sl, args);
-            return Integer(
-                std::get<Integer>(heap[args[0]]).value <
-                std::get<Integer>(heap[args[1]]).value ? 1 : 0
+            _typecheck<runtime::Integer, runtime::Integer>(sl, args);
+            return runtime::Integer(
+                std::get<runtime::Integer>(heap[args[0]]).value <
+                std::get<runtime::Integer>(heap[args[1]]).value ? 1 : 0
             );
         } else if (name == ".<=") {
-            _typecheck<Integer, Integer>(sl, args);
-            return Integer(
-                std::get<Integer>(heap[args[0]]).value <=
-                std::get<Integer>(heap[args[1]]).value ? 1 : 0
+            _typecheck<runtime::Integer, runtime::Integer>(sl, args);
+            return runtime::Integer(
+                std::get<runtime::Integer>(heap[args[0]]).value <=
+                std::get<runtime::Integer>(heap[args[1]]).value ? 1 : 0
             );
         } else if (name == ".>") {
-            _typecheck<Integer, Integer>(sl, args);
-            return Integer(
-                std::get<Integer>(heap[args[0]]).value >
-                std::get<Integer>(heap[args[1]]).value ? 1 : 0
+            _typecheck<runtime::Integer, runtime::Integer>(sl, args);
+            return runtime::Integer(
+                std::get<runtime::Integer>(heap[args[0]]).value >
+                std::get<runtime::Integer>(heap[args[1]]).value ? 1 : 0
             );
         } else if (name == ".>=") {
-            _typecheck<Integer, Integer>(sl, args);
-            return Integer(
-                std::get<Integer>(heap[args[0]]).value >=
-                std::get<Integer>(heap[args[1]]).value ? 1 : 0
+            _typecheck<runtime::Integer, runtime::Integer>(sl, args);
+            return runtime::Integer(
+                std::get<runtime::Integer>(heap[args[0]]).value >=
+                std::get<runtime::Integer>(heap[args[1]]).value ? 1 : 0
             );
         } else if (name == ".=") {
-            _typecheck<Integer, Integer>(sl, args);
-            return Integer(
-                std::get<Integer>(heap[args[0]]).value ==
-                std::get<Integer>(heap[args[1]]).value ? 1 : 0
+            _typecheck<runtime::Integer, runtime::Integer>(sl, args);
+            return runtime::Integer(
+                std::get<runtime::Integer>(heap[args[0]]).value ==
+                std::get<runtime::Integer>(heap[args[1]]).value ? 1 : 0
             );
         } else if (name == "./=") {
-            _typecheck<Integer, Integer>(sl, args);
-            return Integer(
-                std::get<Integer>(heap[args[0]]).value !=
-                std::get<Integer>(heap[args[1]]).value ? 1 : 0
+            _typecheck<runtime::Integer, runtime::Integer>(sl, args);
+            return runtime::Integer(
+                std::get<runtime::Integer>(heap[args[0]]).value !=
+                std::get<runtime::Integer>(heap[args[1]]).value ? 1 : 0
             );
         } else if (name == ".and") {
-            _typecheck<Integer, Integer>(sl, args);
-            return Integer(
-                std::get<Integer>(heap[args[0]]).value &&
-                std::get<Integer>(heap[args[1]]).value ? 1 : 0
+            _typecheck<runtime::Integer, runtime::Integer>(sl, args);
+            return runtime::Integer(
+                std::get<runtime::Integer>(heap[args[0]]).value &&
+                std::get<runtime::Integer>(heap[args[1]]).value ? 1 : 0
             );
         } else if (name == ".or") {
-            _typecheck<Integer, Integer>(sl, args);
-            return Integer(
-                std::get<Integer>(heap[args[0]]).value ||
-                std::get<Integer>(heap[args[1]]).value ? 1 : 0
+            _typecheck<runtime::Integer, runtime::Integer>(sl, args);
+            return runtime::Integer(
+                std::get<runtime::Integer>(heap[args[0]]).value ||
+                std::get<runtime::Integer>(heap[args[1]]).value ? 1 : 0
             );
         } else if (name == ".not") {
-            _typecheck<Integer>(sl, args);
-            return Integer(
-                std::get<Integer>(heap[args[0]]).value ? 0 : 1
+            _typecheck<runtime::Integer>(sl, args);
+            return runtime::Integer(
+                std::get<runtime::Integer>(heap[args[0]]).value ? 0 : 1
             );
         } else if (name == ".s+") {
-            _typecheck<String, String>(sl, args);
-            return String(
-                std::get<String>(heap[args[0]]).value +
-                std::get<String>(heap[args[1]]).value
+            _typecheck<runtime::String, runtime::String>(sl, args);
+            return runtime::String(
+                std::get<runtime::String>(heap[args[0]]).value +
+                std::get<runtime::String>(heap[args[1]]).value
             );
         } else if (name == ".s<") {
-            _typecheck<String, String>(sl, args);
-            return Integer(
-                std::get<String>(heap[args[0]]).value <
-                std::get<String>(heap[args[1]]).value ? 1 : 0
+            _typecheck<runtime::String, runtime::String>(sl, args);
+            return runtime::Integer(
+                std::get<runtime::String>(heap[args[0]]).value <
+                std::get<runtime::String>(heap[args[1]]).value ? 1 : 0
             );
         } else if (name == ".s<=") {
-            _typecheck<String, String>(sl, args);
-            return Integer(
-                std::get<String>(heap[args[0]]).value <=
-                std::get<String>(heap[args[1]]).value ? 1 : 0
+            _typecheck<runtime::String, runtime::String>(sl, args);
+            return runtime::Integer(
+                std::get<runtime::String>(heap[args[0]]).value <=
+                std::get<runtime::String>(heap[args[1]]).value ? 1 : 0
             );
         } else if (name == ".s>") {
-            _typecheck<String, String>(sl, args);
-            return Integer(
-                std::get<String>(heap[args[0]]).value >
-                std::get<String>(heap[args[1]]).value ? 1 : 0
+            _typecheck<runtime::String, runtime::String>(sl, args);
+            return runtime::Integer(
+                std::get<runtime::String>(heap[args[0]]).value >
+                std::get<runtime::String>(heap[args[1]]).value ? 1 : 0
             );
         } else if (name == ".s>=") {
-            _typecheck<String, String>(sl, args);
-            return Integer(
-                std::get<String>(heap[args[0]]).value >=
-                std::get<String>(heap[args[1]]).value ? 1 : 0
+            _typecheck<runtime::String, runtime::String>(sl, args);
+            return runtime::Integer(
+                std::get<runtime::String>(heap[args[0]]).value >=
+                std::get<runtime::String>(heap[args[1]]).value ? 1 : 0
             );
         } else if (name == ".s=") {
-            _typecheck<String, String>(sl, args);
-            return Integer(
-                std::get<String>(heap[args[0]]).value ==
-                std::get<String>(heap[args[1]]).value ? 1 : 0
+            _typecheck<runtime::String, runtime::String>(sl, args);
+            return runtime::Integer(
+                std::get<runtime::String>(heap[args[0]]).value ==
+                std::get<runtime::String>(heap[args[1]]).value ? 1 : 0
             );
         } else if (name == ".s/=") {
-            _typecheck<String, String>(sl, args);
-            return Integer(
-                std::get<String>(heap[args[0]]).value !=
-                std::get<String>(heap[args[1]]).value ? 1 : 0
+            _typecheck<runtime::String, runtime::String>(sl, args);
+            return runtime::Integer(
+                std::get<runtime::String>(heap[args[0]]).value !=
+                std::get<runtime::String>(heap[args[1]]).value ? 1 : 0
             );
         } else if (name == ".s||") {
-            _typecheck<String>(sl, args);
-            return Integer(
-                std::get<String>(heap[args[0]]).value.size()
+            _typecheck<runtime::String>(sl, args);
+            return runtime::Integer(
+                std::get<runtime::String>(heap[args[0]]).value.size()
             );
         } else if (name == ".s[]") {
-            _typecheck<String, Integer, Integer>(sl, args);
-            int n = std::get<String>(heap[args[0]]).value.size();
-            int l = std::get<Integer>(heap[args[1]]).value;
-            int r = std::get<Integer>(heap[args[2]]).value;
+            _typecheck<runtime::String, runtime::Integer, runtime::Integer>(sl, args);
+            int n = std::get<runtime::String>(heap[args[0]]).value.size();
+            int l = std::get<runtime::Integer>(heap[args[1]]).value;
+            int r = std::get<runtime::Integer>(heap[args[2]]).value;
             if (!(
                 (0 <= l && l < n) &&
                 (0 <= r && r < n) &&
                 (l <= r)
             )) {
-                panic("runtime", "invalid substring range", sl);
+                utils::panic("runtime", "invalid substring range", sl);
             }
-            return String(
-                std::get<String>(heap[args[0]]).value.substr(l, r - l)
+            return runtime::String(
+                std::get<runtime::String>(heap[args[0]]).value.substr(l, r - l)
             );
         } else if (name == ".quote") {
-            _typecheck<String>(sl, args);
-            return String(
-                quote(std::get<String>(heap[args[0]]).value)
+            _typecheck<runtime::String>(sl, args);
+            return runtime::String(
+                syntax::quote(std::get<runtime::String>(heap[args[0]]).value)
             );
         } else if (name == ".unquote") {
-            _typecheck<String>(sl, args);
-            return String(
-                unquote(std::get<String>(heap[args[0]]).value)
+            _typecheck<runtime::String>(sl, args);
+            return runtime::String(
+                syntax::unquote(std::get<runtime::String>(heap[args[0]]).value)
             );
         } else if (name == ".s->i") {
-            _typecheck<String>(sl, args);
-            return Integer(
-                std::stoi(std::get<String>(heap[args[0]]).value)  // TODO: exceptions
+            _typecheck<runtime::String>(sl, args);
+            return runtime::Integer(
+                std::stoi(std::get<runtime::String>(heap[args[0]]).value)  // TODO: exceptions
             );
         } else if (name == ".i->s") {
-            _typecheck<Integer>(sl, args);
-            return String(
-                std::to_string(std::get<Integer>(heap[args[0]]).value)
+            _typecheck<runtime::Integer>(sl, args);
+            return runtime::String(
+                std::to_string(std::get<runtime::Integer>(heap[args[0]]).value)
             );
         } else if (name == ".type") {
-            _typecheck<Value>(sl, args);
+            _typecheck<runtime::Value>(sl, args);
             int label = -1;
-            if (std::holds_alternative<Void>(heap[args[0]])) {
+            if (std::holds_alternative<runtime::Void>(heap[args[0]])) {
                 label = 0;
-            } else if (std::holds_alternative<Integer>(heap[args[0]])) {
+            } else if (std::holds_alternative<runtime::Integer>(heap[args[0]])) {
                 label = 1;
-            } else {
+            } else if (std::holds_alternative<runtime::String>(heap[args[0]])) {
                 label = 2;
+            } else {
+                label = 3;
             }
-            return Integer(label);
+            return runtime::Integer(label);
         } else if (name == ".eval") {
-            _typecheck<String>(sl, args);
-            State state(std::get<String>(heap[args[0]]).value);
+            _typecheck<runtime::String>(sl, args);
+            State state(std::get<runtime::String>(heap[args[0]]).value);
             state.execute();
             return state.getResult();  // this should be a copy
         } else if (name == ".getchar") {
             _typecheck<>(sl, args);
             auto c = std::cin.get();
             if (std::cin.eof()) {
-                return Void();
+                return runtime::Void();
             } else {
                 std::string s;
                 s.push_back(static_cast<char>(c));
-                return String(s);
+                return runtime::String(s);
             }
         } else if (name == ".getint") {
             _typecheck<>(sl, args);
             int v;
             if (std::cin >> v) {
-                return Integer(v);
+                return runtime::Integer(v);
             } else {
-                return Void();
+                return runtime::Void();
             }
         } else if (name == ".putstr") {
-            _typecheck<String>(sl, args);
-            std::cout << std::get<String>(heap[args[0]]).value;
-            return Void();
+            _typecheck<runtime::String>(sl, args);
+            std::cout << std::get<runtime::String>(heap[args[0]]).value;
+            return runtime::Void();
         } else if (name == ".flush") {
             _typecheck<>(sl, args);
             std::cout << std::flush;
-            return Void();
+            return runtime::Void();
         } else {
             _errorStack();
-            panic("runtime", "unrecognized intrinsic call", sl);
+            utils::panic("runtime", "unrecognized intrinsic call", sl);
             // unreachable
-            return Void();
+            return runtime::Void();
         }
     }
     // memory management
     template <typename V, typename... Args>
-    requires isAlternativeOf<V, Value>
-    Location _new(Args&&... args) {
+    requires utils::isAlternativeOf<V, runtime::Value>
+    syntax::Location _new(Args&&... args) {
         heap.push_back(std::move(V(std::forward<Args>(args)...)));
         return heap.size() - 1;
     }
-    Location _moveNew(Value v) {
+    syntax::Location _moveNew(runtime::Value v) {
         heap.push_back(std::move(v));
         return heap.size() - 1;
     }
-    std::unordered_set<Location> _mark() {
-        std::unordered_set<Location> visited;
+    std::unordered_set<syntax::Location> _mark() {
+        std::unordered_set<syntax::Location> visited;
         // for each traversed location, specifically handle the closure case
-        std::function<void(Location)> traverseLocation =
+        std::function<void(syntax::Location)> traverseLocation =
             // "this" captures the current object by reference
-            [this, &visited, &traverseLocation](Location loc) {
+            [this, &visited, &traverseLocation](syntax::Location loc) {
             if (!(visited.contains(loc))) {
                 visited.insert(loc);
-                if (std::holds_alternative<Closure>(heap[loc])) {
-                    for (const auto &[_, l] : std::get<Closure>(heap[loc]).env) {
+                if (std::holds_alternative<runtime::Closure>(heap[loc])) {
+                    for (const auto &[_, l] : std::get<runtime::Closure>(heap[loc]).env) {
                         traverseLocation(l);
                     }
                 }
@@ -2122,11 +2132,11 @@ private:
         traverseLocation(resultLoc);
         return visited;
     }
-    std::pair<int, std::unordered_map<Location, Location>>
-        _sweepAndCompact(const std::unordered_set<Location> &visited) {
-        std::unordered_map<Location, Location> relocation;
-        Location n = heap.size();
-        Location i{numLiterals}, j{numLiterals};
+    std::pair<int, std::unordered_map<syntax::Location, syntax::Location>>
+        _sweepAndCompact(const std::unordered_set<syntax::Location> &visited) {
+        std::unordered_map<syntax::Location, syntax::Location> relocation;
+        syntax::Location n = heap.size();
+        syntax::Location i{numLiterals}, j{numLiterals};
         while (j < n) {
             if (visited.contains(j)) {
                 if (i < j) {
@@ -2140,8 +2150,8 @@ private:
         heap.resize(i);
         return std::make_pair(n - i, std::move(relocation));
     }
-    void _relocate(const std::unordered_map<Location, Location> &relocation) {
-        auto reloc = [&relocation](Location &loc) -> void {
+    void _relocate(const std::unordered_map<syntax::Location, syntax::Location> &relocation) {
+        auto reloc = [&relocation](syntax::Location &loc) -> void {
             if (relocation.contains(loc)) {
                 loc = relocation.at(loc);
             }
@@ -2163,8 +2173,8 @@ private:
         reloc(resultLoc);
         // traverse the closure values
         for (auto &v : heap) {
-            if (std::holds_alternative<Closure>(v)) {
-                auto &c = std::get<Closure>(v);
+            if (std::holds_alternative<runtime::Closure>(v)) {
+                auto &c = std::get<runtime::Closure>(v);
                 for (auto &[_, loc] : c.env) {
                     reloc(loc);
                 }
@@ -2177,8 +2187,8 @@ private:
         _relocate(relocation);
         return removed;
     }
-    std::vector<SourceLocation> _getFrameSLs() {
-        std::vector<SourceLocation> frameSLs;
+    std::vector<utils::SourceLocation> _getFrameSLs() {
+        std::vector<utils::SourceLocation> frameSLs;
         for (const auto &l : stack) {
             if (l.frame) {
                 if (l.expr == nullptr) {  // main frame
@@ -2200,11 +2210,11 @@ private:
 
     // states
     std::string source;
-    ExprNode *expr;
-    std::vector<Layer> stack;
-    std::vector<Value> heap;
+    syntax::ExprNode *expr;
+    std::vector<runtime::Layer> stack;
+    std::vector<runtime::Value> heap;
     int numLiterals = 0;
-    Location resultLoc = -1;
+    syntax::Location resultLoc = -1;
 };
 
 // ------------------------------
@@ -2237,7 +2247,7 @@ int main(int argc, char **argv) {
         State state(std::move(source));
         state.execute();
         std::cout << "<end-of-stdout>\n"
-                  << valueToString(state.getResult(), state.getExpr()) << std::endl;
+                  << serialization::valueToString(state.getResult(), state.getExpr()) << std::endl;
         std::cerr << "***** final state serialization *****\n"
                   << '|' << state.serialize() << '|' << std::endl;
     } catch (const std::runtime_error &e) {
