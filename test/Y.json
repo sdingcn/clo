@@ -1,4 +1,4 @@
 {
     "in" : "",
-    "out" : "<end-of-stdout>\n120\n"
+    "out" : "<end-of-stdout>\n( val 120 )\n"
 }

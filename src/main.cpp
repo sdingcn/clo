@@ -1430,7 +1430,7 @@ namespace serialization {
     using Path = std::vector<int>;
 
     std::string pathToString(const Path& path) {
-        std::string s = "[";
+        std::string s = "[ pth";
         for (int i : path) {
             s += " ";
             s += std::to_string(i);
@@ -1445,6 +1445,7 @@ namespace serialization {
         std::string word;
         while (sin >> word) {
             if (word == "[") {
+                sin >> word;  // "pth"
                 continue;
             }
             else if (word == "]") {
@@ -1458,7 +1459,7 @@ namespace serialization {
     }
 
     std::string envToString(const runtime::Env& env) {
-        std::string s = "[";
+        std::string s = "[ env";
         for (auto& p : env) {
             s += " ";
             s += p.first;
@@ -1475,6 +1476,7 @@ namespace serialization {
         std::string word;
         while (sin >> word) {
             if (word == "[") {
+                sin >> word;  // "env"
                 continue;
             } else if (word == "]") {
                 break;
@@ -1489,21 +1491,24 @@ namespace serialization {
 
     std::string valueToString(const runtime::Value& v, const syntax::ExprNode* root) {
         if (std::holds_alternative<runtime::Void>(v)) {
-            return "<void>";
+            return "( val <void> )";
         }
         else if (std::holds_alternative<runtime::Integer>(v)) {
             auto i = std::get<runtime::Integer>(v);
-            return std::to_string(i.value);
+            return "( val " + std::to_string(i.value) + " )";
         }
         else if (std::holds_alternative<runtime::String>(v)) {
             auto s = std::get<runtime::String>(v);
-            return syntax::quote(s.value);
+            return "( val " + syntax::quote(s.value) + " )";
         }
         else {
             auto c = std::get<runtime::Closure>(v);
-            std::string s = envToString(c.env);
+            std::string s = "( val";
+            s += " ";
+            s += envToString(c.env);
             s += " ";
             s += pathToString(encodeNodePath(c.fun, root));
+            s += " )";
             return s;
         }
     }
@@ -1514,13 +1519,13 @@ namespace serialization {
     }
 
     std::string layerToString(const runtime::Layer& layer, const syntax::ExprNode* root) {
-        std::string serialized_layer;
+        std::string serialized_layer = "< lay";
         // bool frame;
         if (layer.frame) {
-            serialized_layer += "frame";
+            serialized_layer += " !fr";
         }
         else {
-            serialized_layer += "nonframe";
+            serialized_layer += " !nfr";
         }
         // std::shared_ptr<Env> env;
         if (layer.frame) {
@@ -1533,18 +1538,20 @@ namespace serialization {
             serialized_layer += pathToString(encodeNodePath(layer.expr, root));
         }
         else {
-            serialized_layer += "[ -1 ]";
+            serialized_layer += "[ pth -1 ]";
         }
         // int pc = 0;
-        serialized_layer += " ";
+        serialized_layer += " ( pc ";
         serialized_layer += std::to_string(layer.pc);
+        serialized_layer += " )";
         // std::vector<Location> local;
-        serialized_layer += " [";
+        serialized_layer += " [ lok";
         for (auto& l : layer.local) {
             serialized_layer += " ";
             serialized_layer += std::to_string(l);
         }
         serialized_layer += " ]";
+        serialized_layer += " >";
         return serialized_layer;
     }
 
@@ -1949,28 +1956,31 @@ public:
     std::string serialize() const {
         std::string serialized_state;
         // std::string source;
-        serialized_state += source;
-        // (skipped, because source is more accurate) syntax::ExprNode *expr;
+        serialized_state = "( src (" + source + ") )";
+        // syntax::ExprNode *expr;
+        // (skipped, because source is more accurate)
         // std::vector<Layer> stack;
-        serialized_state += " [";
+        serialized_state += " { stk";
         for (auto& layer : stack) {
             serialized_state += " ";
             serialized_state += serialization::layerToString(layer, expr);
         }
-        serialized_state += " ]";
+        serialized_state += " }";
         // std::vector<Value> heap;
-        serialized_state += " [";
+        serialized_state += " { hp";
         for (auto& value : heap) {
             serialized_state += " ";
             serialized_state += serialization::valueToString(value, expr);
         }
-        serialized_state += " ]";
+        serialized_state += " }";
         // int numLiterals = 0;
-        serialized_state += " ";
+        serialized_state += " ( nLit ";
         serialized_state += std::to_string(numLiterals);
+        serialized_state += " )";
         // Location resultLoc;
-        serialized_state += " ";
+        serialized_state += " ( rLoc ";
         serialized_state += std::to_string(resultLoc);
+        serialized_state += " )";
         return serialized_state;
     }
 private:

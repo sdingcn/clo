@@ -1,4 +1,4 @@
 {
     "in" : "7 10 11 6 1442968193 50000 0",
-    "out" : "Yes\nNo\nYes\nNo\nYes\nNo\n<end-of-stdout>\n<void>\n"
+    "out" : "Yes\nNo\nYes\nNo\nYes\nNo\n<end-of-stdout>\n( val <void> )\n"
 }
