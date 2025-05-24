@@ -1144,12 +1144,14 @@ namespace runtime {
     struct Layer {
         // a default argument is evaluated each time the function is called without
         // that argument (not important here)
-        Layer(std::shared_ptr<Env> e = nullptr, const syntax::ExprNode* x = nullptr, bool f = false) :
-            env(std::move(e)), expr(x), frame(f) {
-        }
-
-        Layer(std::string) {
-            // TODO: deserialize
+        Layer(
+            std::shared_ptr<Env> e = nullptr,
+            const syntax::ExprNode* x = nullptr,
+            bool f = false,
+            int p = 0,
+            std::vector<syntax::Location> l = std::vector<syntax::Location>()
+        ) :
+            frame(f), env(std::move(e)), expr(x), pc(p), local(std::move(l)) {
         }
 
         // whether this is a frame
@@ -1158,7 +1160,7 @@ namespace runtime {
         std::shared_ptr<Env> env;
         const syntax::ExprNode* expr;
         // program counter inside this expr
-        int pc = 0;
+        int pc;
         // temporary local information for evaluation
         std::vector<syntax::Location> local;
     };
@@ -1167,20 +1169,58 @@ namespace runtime {
 
 namespace serialization {
 
-    std::vector<int> encodeNodePath(const syntax::ExprNode* node, const syntax::ExprNode* root) {
+    // Ser is the type of serialized program states (excluding the source code)
+    using Ser = std::vector<std::string>;
+    // TODO: any way to optimize?
+    Ser operator,(const Ser& s1, const Ser& s2) {
+        Ser s;
+        for (auto& e : s1) {
+            s.push_back(e);
+        }
+        for (auto& e : s2) {
+            s.push_back(e);
+        }
+        return s;
+    }
+    // TODO: any way to optimize?
+    Ser slice(const Ser& s0, int i, int j) {
+        Ser s;
+        for (int k = i; k < j; k++) {
+            s.push_back(s0[k]);
+        }
+        return s;
+    }
+    std::string join(const Ser& s) {
+        std::string ret;
+        for (auto& e : s) {
+            if (ret == "") {
+                ret += e;
+            }
+            else {
+                ret += " ";
+                ret += e;
+            }
+        }
+        return ret;
+    }
+
+    // Path is the type of AST node locations
+    using Path = std::vector<int>;
+
+    Path encodeNodePath(const syntax::ExprNode* node, const syntax::ExprNode* root) {
         if (node == nullptr) {
             utils::panic("serialization", "node is nullptr");
             // unreachable
-            return std::vector<int>();
+            return Path();
         }
         if (root == nullptr) {
             utils::panic("serialization", "root is nullptr");
             // unreachable
-            return std::vector<int>();
+            return Path();
         }
-        std::vector<int> nodePath;
-        std::function<bool(std::vector<int>&, const syntax::ExprNode*)>
-            findPath = [&](std::vector<int>& curPath, const syntax::ExprNode* curNode) -> bool {
+        Path nodePath;
+        std::function<bool(Path&, const syntax::ExprNode*)>
+            findPath = [&](Path& curPath, const syntax::ExprNode* curNode) -> bool {
             if (curNode == node) {
                 // copy
                 nodePath = curPath;
@@ -1309,18 +1349,18 @@ namespace serialization {
                 }
             }
             };
-        std::vector<int> currentPath;
+        Path currentPath;
         if (findPath(currentPath, root)) {
             return nodePath;
         }
         else {
             utils::panic("serialization", "node not found", node->sl);
             // unreachable
-            return std::vector<int>();
+            return Path();
         }
     }
 
-    const syntax::ExprNode* decodeNodePath(const std::vector<int>& path, const syntax::ExprNode* root) {
+    const syntax::ExprNode* decodeNodePath(const Path& path, const syntax::ExprNode* root) {
         const syntax::ExprNode* curNode = root;
         for (int i : path) {
             if (auto inode = dynamic_cast<const syntax::IntegerNode*>(curNode)) {
@@ -1427,137 +1467,168 @@ namespace serialization {
         return curNode;
     }
 
-    using Path = std::vector<int>;
-
-    std::string pathToString(const Path& path) {
-        std::string s = "[ pth";
+    Ser pathToSer(const Path& path) {
+        Ser ser;
+        ser.push_back("[");
+        ser.push_back("pth");
         for (int i : path) {
-            s += " ";
-            s += std::to_string(i);
+            ser.push_back(std::to_string(i));
         }
-        s += " ]";
-        return s;
+        ser.push_back("]");
+        return ser;
     }
 
-    Path stringToPath(const std::string& s) {
-        std::istringstream sin(s);
+    Path serToPath(const Ser& ser) {
         Path path;
-        std::string word;
-        while (sin >> word) {
-            if (word == "[") {
-                sin >> word;  // "pth"
-                continue;
-            }
-            else if (word == "]") {
-                break;
-            }
-            else {
-                path.push_back(std::stoi(word));
-            }
+        for (auto p = ser.begin() + 2; p + 1 != ser.end(); p++) {
+            path.push_back(std::stoi(*p));
         }
         return path;
     }
 
-    std::string envToString(const runtime::Env& env) {
-        std::string s = "[ env";
+    Ser envToSer(const runtime::Env& env) {
+        Ser ser;
+        ser.push_back("[");
+        ser.push_back("env");
         for (auto& p : env) {
-            s += " ";
-            s += p.first;
-            s += " ";
-            s += std::to_string(p.second);
+            ser.push_back(p.first);
+            ser.push_back(std::to_string(p.second));
         }
-        s += " ]";
-        return s;
+        ser.push_back("]");
+        return ser;
     }
 
-    runtime::Env stringToEnv(const std::string& s) {
-        std::istringstream sin(s);
+    runtime::Env serToEnv(const Ser& ser) {
         runtime::Env env;
-        std::string word;
-        while (sin >> word) {
-            if (word == "[") {
-                sin >> word;  // "env"
-                continue;
-            } else if (word == "]") {
-                break;
-            } else {
-                syntax::Location loc;
-                sin >> loc;
-                env.push_back(std::make_pair(word, loc));
-            }
+        for (auto p = ser.begin() + 2; p + 1 != ser.end(); p += 2) {
+            env.push_back(std::make_pair(*p, std::stoi(*(p + 1))));
         }
         return env;
     }
 
-    std::string valueToString(const runtime::Value& v, const syntax::ExprNode* root) {
+    Ser valueToSer(const runtime::Value& v, const syntax::ExprNode* root) {
         if (std::holds_alternative<runtime::Void>(v)) {
-            return "( val <void> )";
+            return {"(", "vval", ")"};
         }
         else if (std::holds_alternative<runtime::Integer>(v)) {
             auto i = std::get<runtime::Integer>(v);
-            return "( val " + std::to_string(i.value) + " )";
+            return {"(", "ival", std::to_string(i.value), ")"};
         }
         else if (std::holds_alternative<runtime::String>(v)) {
             auto s = std::get<runtime::String>(v);
-            return "( val " + syntax::quote(s.value) + " )";
+            return {"(", "sval", syntax::quote(s.value), ")"};
         }
         else {
             auto c = std::get<runtime::Closure>(v);
-            std::string s = "( val";
-            s += " ";
-            s += envToString(c.env);
-            s += " ";
-            s += pathToString(encodeNodePath(c.fun, root));
-            s += " )";
-            return s;
+            Ser head = {"(", "cval"};
+            Ser tail = {")"};
+            return head, envToSer(c.env), pathToSer(encodeNodePath(c.fun, root)), tail;
         }
     }
 
-    runtime::Value stringToValue(const std::string& s) {
-        // TODO
-        return runtime::Void();
-    }
-
-    std::string layerToString(const runtime::Layer& layer, const syntax::ExprNode* root) {
-        std::string serialized_layer = "< lay";
-        // bool frame;
-        if (layer.frame) {
-            serialized_layer += " !fr";
+    runtime::Value serToValue(const Ser& ser, const syntax::ExprNode* root) {
+        if (ser[1] == "vval") {
+            return runtime::Void();
+        }
+        else if (ser[1] == "ival") {
+            return runtime::Integer(std::stoi(ser[2]));
+        }
+        else if (ser[1] == "sval") {
+            return runtime::String(syntax::unquote(ser[2]));
         }
         else {
-            serialized_layer += " !nfr";
+            int pathIndex = -1;
+            for (int i = 3; i < ser.size(); i++) {
+                if (ser[i] == "[") {
+                    pathIndex = i;
+                    break;
+                }
+            }
+            auto env = serToEnv(slice(ser, 2, pathIndex));
+            auto path = serToPath(slice(ser, pathIndex, ser.size() - 1));
+            return runtime::Closure(
+                env, dynamic_cast<const syntax::LambdaNode*>(decodeNodePath(path, root)));
+        }
+    }
+
+    Ser layerToSer(const runtime::Layer& layer, const syntax::ExprNode* root) {
+        Ser serializedLayer = {"<", "lay"};
+        // bool frame;
+        if (layer.frame) {
+            serializedLayer.push_back("!fr");
+        }
+        else {
+            serializedLayer.push_back("!nfr");
         }
         // std::shared_ptr<Env> env;
         if (layer.frame) {
-            serialized_layer += " ";
-            serialized_layer += envToString(*(layer.env));
+            serializedLayer = serializedLayer, envToSer(*(layer.env));
         }
         // const syntax::ExprNode *expr;
-        serialized_layer += " ";
         if (layer.expr != nullptr) {
-            serialized_layer += pathToString(encodeNodePath(layer.expr, root));
+            serializedLayer = serializedLayer, pathToSer(encodeNodePath(layer.expr, root));
         }
         else {
-            serialized_layer += "[ pth -1 ]";
+            Ser dummyPathSer = {"[", "pth", "-1", "]"};
+            serializedLayer = serializedLayer, dummyPathSer;
         }
-        // int pc = 0;
-        serialized_layer += " ( pc ";
-        serialized_layer += std::to_string(layer.pc);
-        serialized_layer += " )";
+        // int pc;
+        Ser pcSer = {"(", "pc", std::to_string(layer.pc), ")"};
+        serializedLayer = serializedLayer, pcSer;
         // std::vector<Location> local;
-        serialized_layer += " [ lok";
+        Ser head = {"[", "lok"};
+        Ser body;
         for (auto& l : layer.local) {
-            serialized_layer += " ";
-            serialized_layer += std::to_string(l);
+            body.push_back(std::to_string(l));
         }
-        serialized_layer += " ]";
-        serialized_layer += " >";
-        return serialized_layer;
+        Ser tail = {"]"};
+        Ser end = {">"};
+        serializedLayer = serializedLayer, head, body, tail, end;
+        return serializedLayer;
     }
 
-    runtime::Layer stringToLayer(const std::string& str, const syntax::ExprNode* root) {
-        // TODO
-        return runtime::Layer();
+    runtime::Layer serToLayer(
+        const Ser& ser, const runtime::Layer& parent, const syntax::ExprNode* root) {
+        // bool frame;
+        bool frame = (ser[2] == "!fr");
+        // std::shared_ptr<Env> env;
+        std::shared_ptr<runtime::Env> env;
+        int nextPos = 3;
+        if (frame) {
+            for (int i = 3; i < ser.size(); i++) {
+                if (ser[i] == "]") {
+                    nextPos = i + 1;
+                    break;
+                }
+            }
+            env = std::make_shared<runtime::Env>(serToEnv(slice(ser, 3, nextPos)));
+        } else {
+            env = parent.env;
+        }
+        // const syntax::ExprNode* expr;
+        const syntax::ExprNode* expr = nullptr;
+        if (ser[nextPos + 2] != "-1") {
+            int start = nextPos;
+            for (int i = nextPos; i < ser.size(); i++) {
+                if (ser[i] == "]") {
+                    nextPos = i + 1;
+                    break;
+                }
+            }
+            expr = decodeNodePath(serToPath(slice(ser, start, nextPos)), root);
+        }
+        // int pc;
+        int pc = std::stoi(ser[nextPos + 2]);
+        nextPos += 4;
+        // std::vector<syntax::Location> local;
+        std::vector<syntax::Location> local;
+        for (int i = nextPos + 2; i < ser.size(); i++) {
+            if (ser[i] == "]") {
+                break;
+            }
+            local.push_back(std::stoi(ser[i]));
+        }
+        return runtime::Layer(std::move(env), expr, frame, pc, std::move(local));
     }
 
 }  // namespace serialization
@@ -1954,34 +2025,34 @@ public:
         return expr;
     }
     std::string serialize() const {
-        std::string serialized_state;
         // std::string source;
-        serialized_state = "( src (" + source + ") )";
+        std::string serializedSource = "{ src (" + source + ") }";
         // syntax::ExprNode *expr;
         // (skipped, because source is more accurate)
+        std::string serializedState;
         // std::vector<Layer> stack;
-        serialized_state += " { stk";
+        serializedState += "{ stk";
         for (auto& layer : stack) {
-            serialized_state += " ";
-            serialized_state += serialization::layerToString(layer, expr);
+            serializedState += " ";
+            serializedState += serialization::join(serialization::layerToSer(layer, expr));
         }
-        serialized_state += " }";
+        serializedState += " }";
         // std::vector<Value> heap;
-        serialized_state += " { hp";
+        serializedState += " { hp";
         for (auto& value : heap) {
-            serialized_state += " ";
-            serialized_state += serialization::valueToString(value, expr);
+            serializedState += " ";
+            serializedState += serialization::join(serialization::valueToSer(value, expr));
         }
-        serialized_state += " }";
+        serializedState += " }";
         // int numLiterals = 0;
-        serialized_state += " ( nLit ";
-        serialized_state += std::to_string(numLiterals);
-        serialized_state += " )";
+        serializedState += " { nLit ";
+        serializedState += std::to_string(numLiterals);
+        serializedState += " }";
         // Location resultLoc;
-        serialized_state += " ( rLoc ";
-        serialized_state += std::to_string(resultLoc);
-        serialized_state += " )";
-        return serialized_state;
+        serializedState += " { rLoc ";
+        serializedState += std::to_string(resultLoc);
+        serializedState += " }";
+        return "|" + serializedSource + " " + serializedState + "|";
     }
 private:
     template <typename... Alt>
@@ -2434,9 +2505,10 @@ int main(int argc, char** argv) {
         State state(std::move(source));
         state.execute();
         std::cout << "<end-of-stdout>\n"
-            << serialization::valueToString(state.getResult(), state.getExpr()) << std::endl;
+            << serialization::join(
+                   serialization::valueToSer(state.getResult(), state.getExpr())) << std::endl;
         std::cerr << "***** final state serialization *****\n"
-            << '|' << state.serialize() << '|' << std::endl;
+            << state.serialize() << std::endl;
     }
     catch (const std::runtime_error& e) {
         std::cerr << e.what() << std::endl;
