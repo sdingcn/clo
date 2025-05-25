@@ -917,21 +917,21 @@ namespace syntax {
                 token.text[0] == '-' ||
                 token.text[0] == '+'
                 );
-            };
+        };
         auto isStringToken = [](const Token& token) {
             return token.text.size() > 0 && token.text[0] == '"';
-            };
+        };
         auto isIntrinsicToken = [](const Token& token) {
             return token.text.size() > 0 && token.text[0] == '.';
-            };
+        };
         auto isVariableToken = [](const Token& token) {
             return token.text.size() > 0 && (std::isalpha(token.text[0]) || token.text[0] == '_');
-            };
+        };
         auto isTheToken = [](const std::string& s) {
             return [s](const Token& token) {
                 return token.text == s;
-                };
             };
+        };
         auto consume = [&tokens]<typename Callable>(const Callable & predicate) -> Token {
             if (tokens.size() == 0) {
                 utils::panic("parser", "incomplete token stream");
@@ -959,15 +959,15 @@ namespace syntax {
         parseInteger = [&]() -> IntegerNode* {
             auto token = consume(isIntegerToken);
             return new IntegerNode(token.sl, token.text);
-            };
+        };
         parseString = [&]() -> StringNode* {  // don't unquote here: AST keeps raw tokens
             auto token = consume(isStringToken);
             return new StringNode(token.sl, token.text);
-            };
+        };
         parseVariable = [&]() -> VariableNode* {
             auto token = consume(isVariableToken);
             return new VariableNode(token.sl, std::move(token.text));
-            };
+        };
         parseLambda = [&]() -> LambdaNode* {
             auto start = consume(isTheToken("lambda"));
             consume(isTheToken("("));
@@ -978,7 +978,7 @@ namespace syntax {
             consume(isTheToken(")"));
             auto expr = parseExpr();
             return new LambdaNode(start.sl, std::move(varList), expr);
-            };
+        };
         parseLetrec = [&]() -> LetrecNode* {
             auto start = consume(isTheToken("letrec"));
             consume(isTheToken("("));
@@ -992,14 +992,14 @@ namespace syntax {
             consume(isTheToken(")"));
             auto expr = parseExpr();
             return new LetrecNode(start.sl, std::move(varExprList), expr);
-            };
+        };
         parseIf = [&]() -> IfNode* {
             auto start = consume(isTheToken("if"));
             auto cond = parseExpr();
             auto branch1 = parseExpr();
             auto branch2 = parseExpr();
             return new IfNode(start.sl, cond, branch1, branch2);
-            };
+        };
         parseSequence = [&]() -> SequenceNode* {
             auto start = consume(isTheToken("{"));
             std::vector<ExprNode*> exprList;
@@ -1011,7 +1011,7 @@ namespace syntax {
             }
             consume(isTheToken("}"));
             return new SequenceNode(start.sl, std::move(exprList));
-            };
+        };
         parseIntrinsicCall = [&]() -> IntrinsicCallNode* {
             auto start = consume(isTheToken("("));
             auto intrinsic = consume(isIntrinsicToken);
@@ -1021,7 +1021,7 @@ namespace syntax {
             }
             consume(isTheToken(")"));
             return new IntrinsicCallNode(start.sl, std::move(intrinsic.text), std::move(argList));
-            };
+        };
         parseExprCall = [&]() -> ExprCallNode* {
             auto start = consume(isTheToken("("));
             auto expr = parseExpr();
@@ -1031,13 +1031,13 @@ namespace syntax {
             }
             consume(isTheToken(")"));
             return new ExprCallNode(start.sl, expr, std::move(argList));
-            };
+        };
         parseAt = [&]() -> AtNode* {
             auto start = consume(isTheToken("@"));
             auto var = parseVariable();
             auto expr = parseExpr();
             return new AtNode(start.sl, var, expr);
-            };
+        };
         parseExpr = [&]() -> ExprNode* {
             if (!tokens.size()) {
                 utils::panic("parser", "incomplete token stream");
@@ -1087,7 +1087,7 @@ namespace syntax {
                 // unreachable
                 return nullptr;
             }
-            };
+        };
 
         auto expr = parseExpr();
         return expr;
@@ -1522,7 +1522,7 @@ namespace serialization {
             auto c = std::get<runtime::Closure>(v);
             Ser head = {"(", "cval"};
             Ser tail = {")"};
-            return head, envToSer(c.env), pathToSer(encodeNodePath(c.fun, root)), tail;
+            return (head, envToSer(c.env), pathToSer(encodeNodePath(c.fun, root)), tail);
         }
     }
 
@@ -1562,19 +1562,19 @@ namespace serialization {
         }
         // std::shared_ptr<Env> env;
         if (layer.frame) {
-            serializedLayer = serializedLayer, envToSer(*(layer.env));
+            serializedLayer = (serializedLayer, envToSer(*(layer.env)));
         }
         // const syntax::ExprNode *expr;
         if (layer.expr != nullptr) {
-            serializedLayer = serializedLayer, pathToSer(encodeNodePath(layer.expr, root));
+            serializedLayer = (serializedLayer, pathToSer(encodeNodePath(layer.expr, root)));
         }
         else {
             Ser dummyPathSer = {"[", "pth", "-1", "]"};
-            serializedLayer = serializedLayer, dummyPathSer;
+            serializedLayer = (serializedLayer, dummyPathSer);
         }
         // int pc;
         Ser pcSer = {"(", "pc", std::to_string(layer.pc), ")"};
-        serializedLayer = serializedLayer, pcSer;
+        serializedLayer = (serializedLayer, pcSer);
         // std::vector<Location> local;
         Ser head = {"[", "lok"};
         Ser body;
@@ -1583,7 +1583,7 @@ namespace serialization {
         }
         Ser tail = {"]"};
         Ser end = {">"};
-        serializedLayer = serializedLayer, head, body, tail, end;
+        serializedLayer = (serializedLayer, head, body, tail, end);
         return serializedLayer;
     }
 
@@ -1635,49 +1635,31 @@ namespace serialization {
 
 class State {
 public:
-    State(std::string src) {
-        source = std::move(src);
-        // parsing and static analysis (TODO: exceptions?)
-        expr = syntax::parse(syntax::lex(source));
-        std::function<void(syntax::ExprNode*)> checkDuplicate = [](syntax::ExprNode* e) -> void {
-            if (auto lnode = dynamic_cast<syntax::LambdaNode*>(e)) {
-                std::unordered_set<std::string> varNames;
-                for (auto var : lnode->varList) {
-                    if (varNames.contains(var->name)) {
-                        utils::panic("sema", "duplicate parameter names", lnode->sl);
-                    }
-                    varNames.insert(var->name);
-                }
-            }
-            else if (auto lnode = dynamic_cast<syntax::LetrecNode*>(e)) {
-                std::unordered_set<std::string> varNames;
-                for (const auto& ve : lnode->varExprList) {
-                    if (varNames.contains(ve.first->name)) {
-                        utils::panic("sema", "duplicate binding names", lnode->sl);
-                    }
-                    varNames.insert(ve.first->name);
-                }
-            }
-            };
-        expr->traverse(syntax::TraversalMode::TOP_DOWN, checkDuplicate);
-        expr->computeFreeVars();
-        expr->computeTail(false);
-        // pre-allocate integer literals and string literals
-        std::function<void(syntax::ExprNode*)> preAllocate = [this](syntax::ExprNode* e) -> void {
-            if (auto inode = dynamic_cast<syntax::IntegerNode*>(e)) {
-                // TODO: exceptions
-                inode->loc = this->_new<runtime::Integer>(std::stoi(inode->val));
-            }
-            else if (auto snode = dynamic_cast<syntax::StringNode*>(e)) {
-                snode->loc = this->_new<runtime::String>(syntax::unquote(snode->val));
-            }
-            };
-        expr->traverse(syntax::TraversalMode::TOP_DOWN, preAllocate);
-        numLiterals = heap.size();
-        // the main frame (which cannot be removed by TCO)
-        stack.emplace_back(std::make_shared<runtime::Env>(), nullptr, true);
-        // the first expression (using the env of the main frame)
-        stack.emplace_back(stack.back().env, expr);
+    State(std::string origin) {
+        if (origin.size() == 0) {
+            utils::panic("state constructor", "empty origin string");
+        }
+        else if (origin[0] != '|') {  // origin is source code
+            // (1) copy source code
+            source = std::move(origin);
+            // (2) AST construction (parsing and static analysis) (TODO: exceptions?)
+            expr = syntax::parse(syntax::lex(source));
+            _populateStaticAnalysisResults();
+            // (3) stack initializtion
+            // the main frame (which cannot be removed by TCO)
+            stack.emplace_back(std::make_shared<runtime::Env>(), nullptr, true);
+            // the first expression (using the env of the main frame)
+            stack.emplace_back(stack.back().env, expr);
+            // (4) heap initialization
+            // skipped (preAllocate may have created some heap entries)
+            // (5) literal boundary initialization
+            numLiterals = heap.size();
+            // (6) result location initialization (no result yet)
+            resultLoc = -1;
+        }
+        else {  // origin is serialized state
+            utils::panic("serialization", "not implemented");
+        }
     }
     State(const State& state) :
         source(state.source),
@@ -2026,7 +2008,8 @@ public:
     }
     std::string serialize() const {
         // std::string source;
-        std::string serializedSource = "{ src (" + source + ") }";
+        std::string serializedSource =
+            "{ src " + std::to_string(source.size()) + " ^" + source + " }";
         // syntax::ExprNode *expr;
         // (skipped, because source is more accurate)
         std::string serializedState;
@@ -2044,7 +2027,7 @@ public:
             serializedState += serialization::join(serialization::valueToSer(value, expr));
         }
         serializedState += " }";
-        // int numLiterals = 0;
+        // int numLiterals;
         serializedState += " { nLit ";
         serializedState += std::to_string(numLiterals);
         serializedState += " }";
@@ -2055,6 +2038,43 @@ public:
         return "|" + serializedSource + " " + serializedState + "|";
     }
 private:
+    void _populateStaticAnalysisResults() {
+        std::function<void(syntax::ExprNode*)> checkDuplicate =
+            [](syntax::ExprNode* e) -> void {
+            if (auto lnode = dynamic_cast<syntax::LambdaNode*>(e)) {
+                std::unordered_set<std::string> varNames;
+                for (auto var : lnode->varList) {
+                    if (varNames.contains(var->name)) {
+                        utils::panic("sema", "duplicate parameter names", lnode->sl);
+                    }
+                    varNames.insert(var->name);
+                }
+            }
+            else if (auto lnode = dynamic_cast<syntax::LetrecNode*>(e)) {
+                std::unordered_set<std::string> varNames;
+                for (const auto& ve : lnode->varExprList) {
+                    if (varNames.contains(ve.first->name)) {
+                        utils::panic("sema", "duplicate binding names", lnode->sl);
+                    }
+                    varNames.insert(ve.first->name);
+                }
+            }
+        };
+        expr->traverse(syntax::TraversalMode::TOP_DOWN, checkDuplicate);
+        expr->computeFreeVars();
+        expr->computeTail(false);
+        std::function<void(syntax::ExprNode*)> preAllocate =
+            [this](syntax::ExprNode* e) -> void {
+            if (auto inode = dynamic_cast<syntax::IntegerNode*>(e)) {
+                // TODO: exceptions
+                inode->loc = this->_new<runtime::Integer>(std::stoi(inode->val));
+            }
+            else if (auto snode = dynamic_cast<syntax::StringNode*>(e)) {
+                snode->loc = this->_new<runtime::String>(syntax::unquote(snode->val));
+            }
+        };
+        expr->traverse(syntax::TraversalMode::TOP_DOWN, preAllocate);
+    }
     template <typename... Alt>
         requires (true && ... && (std::same_as<Alt, runtime::Value> || utils::isAlternativeOf<Alt, runtime::Value>))
     void _typecheck(utils::SourceLocation sl, const std::vector<syntax::Location>& args) {
@@ -2070,7 +2090,7 @@ private:
                     return std::holds_alternative<Alt>(heap[args[i]]);
                 }
             } ()
-                ));
+        ));
         if (!ok) {
             _errorStack();
             utils::panic("runtime", "type error on intrinsic call", sl);
@@ -2471,8 +2491,8 @@ private:
     syntax::ExprNode* expr;
     std::vector<runtime::Layer> stack;
     std::vector<runtime::Value> heap;
-    int numLiterals = 0;
-    syntax::Location resultLoc = -1;
+    int numLiterals;
+    syntax::Location resultLoc;
 };
 
 // ------------------------------
@@ -2481,7 +2501,7 @@ private:
 
 std::string readSource(const std::string& spath) {
     if (!std::filesystem::exists(spath)) {
-        throw std::runtime_error(spath + " does not exist.");
+        utils::panic("reader", spath + " does not exist.");
     }
     static constexpr std::size_t BLOCK = 1024;
     std::ifstream in(spath);
