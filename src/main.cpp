@@ -20,6 +20,11 @@
 #include <variant>
 #include <vector>
 
+#define DBG(x) \
+    std::cerr << "[+] LINE " << __LINE__ \
+              << ": " << (x) << std::endl
+// TODO: add DBG everywhere and use a macro to control it
+
 namespace utils {
 
     // ------------------------------
@@ -1170,7 +1175,11 @@ namespace runtime {
 namespace serialization {
 
     // Ser is the type of serialized program states (excluding the source code)
-    using Ser = std::vector<std::string>;
+    using Ser = std::deque<std::string>;
+    // every segment inside a Ser starts with ("{" | "<" | "[" | "(") and "<label>"
+    // and ends with (")" | "]" | ">" | "}")
+    // and can be nested
+    constexpr int serHeaderLength = 2;
     // TODO: any way to optimize?
     Ser operator,(const Ser& s1, const Ser& s2) {
         Ser s;
@@ -1184,6 +1193,10 @@ namespace serialization {
     }
     // TODO: any way to optimize?
     Ser slice(const Ser& s0, int i, int j) {
+        int s0Size = s0.size();
+        if (!(0 <= i && i <= j && j <= s0Size)) {
+            utils::panic("serialization", "invalid slicing");
+        }
         Ser s;
         for (int k = i; k < j; k++) {
             s.push_back(s0[k]);
@@ -1202,6 +1215,22 @@ namespace serialization {
             }
         }
         return ret;
+    }
+    Ser takeTo(Ser& s, const std::string& e) {
+        Ser ret;
+        while (s.size() > 0 && s.front() != e) {
+            ret.push_back(std::move(s.front()));
+            s.pop_front();
+        }
+        if (s.size() > 0) {
+            ret.push_back(std::move(s.front()));
+            s.pop_front();
+            return ret;
+        } else {
+            utils::panic("serialization", "takeTo failed");
+            // unreachable
+            return Ser();
+        }
     }
 
     // Path is the type of AST node locations
@@ -1227,13 +1256,13 @@ namespace serialization {
                 return true;
             }
             else {
-                if (auto inode = dynamic_cast<const syntax::IntegerNode*>(curNode)) {
+                if (dynamic_cast<const syntax::IntegerNode*>(curNode)) {
                     return false;
                 }
-                else if (auto snode = dynamic_cast<const syntax::StringNode*>(curNode)) {
+                else if (dynamic_cast<const syntax::StringNode*>(curNode)) {
                     return false;
                 }
-                else if (auto vnode = dynamic_cast<const syntax::VariableNode*>(curNode)) {
+                else if (dynamic_cast<const syntax::VariableNode*>(curNode)) {
                     return false;
                 }
                 else if (auto lnode = dynamic_cast<const syntax::LambdaNode*>(curNode)) {
@@ -1363,13 +1392,13 @@ namespace serialization {
     const syntax::ExprNode* decodeNodePath(const Path& path, const syntax::ExprNode* root) {
         const syntax::ExprNode* curNode = root;
         for (int i : path) {
-            if (auto inode = dynamic_cast<const syntax::IntegerNode*>(curNode)) {
+            if (dynamic_cast<const syntax::IntegerNode*>(curNode)) {
                 return nullptr;
             }
-            else if (auto snode = dynamic_cast<const syntax::StringNode*>(curNode)) {
+            else if (dynamic_cast<const syntax::StringNode*>(curNode)) {
                 return nullptr;
             }
-            else if (auto vnode = dynamic_cast<const syntax::VariableNode*>(curNode)) {
+            else if (dynamic_cast<const syntax::VariableNode*>(curNode)) {
                 return nullptr;
             }
             else if (auto lnode = dynamic_cast<const syntax::LambdaNode*>(curNode)) {
@@ -1480,7 +1509,7 @@ namespace serialization {
 
     Path serToPath(const Ser& ser) {
         Path path;
-        for (auto p = ser.begin() + 2; p + 1 != ser.end(); p++) {
+        for (auto p = ser.begin() + serHeaderLength; p + 1 != ser.end(); p++) {
             path.push_back(std::stoi(*p));
         }
         return path;
@@ -1500,7 +1529,7 @@ namespace serialization {
 
     runtime::Env serToEnv(const Ser& ser) {
         runtime::Env env;
-        for (auto p = ser.begin() + 2; p + 1 != ser.end(); p += 2) {
+        for (auto p = ser.begin() + serHeaderLength; p + 1 != ser.end(); p += 2) {
             env.push_back(std::make_pair(*p, std::stoi(*(p + 1))));
         }
         return env;
@@ -1516,7 +1545,9 @@ namespace serialization {
         }
         else if (std::holds_alternative<runtime::String>(v)) {
             auto s = std::get<runtime::String>(v);
-            return {"(", "sval", syntax::quote(s.value), ")"};
+            std::string quoted = syntax::quote(s.value);
+            int len = quoted.size();
+            return {"(", "sval", std::to_string(len), quoted, ")"};
         }
         else {
             auto c = std::get<runtime::Closure>(v);
@@ -1534,17 +1565,18 @@ namespace serialization {
             return runtime::Integer(std::stoi(ser[2]));
         }
         else if (ser[1] == "sval") {
-            return runtime::String(syntax::unquote(ser[2]));
+            return runtime::String(syntax::unquote(ser[3]));
         }
         else {
             int pathIndex = -1;
-            for (int i = 3; i < ser.size(); i++) {
+            int serSize = ser.size();
+            for (int i = 0; i < serSize; i++) {
                 if (ser[i] == "[") {
                     pathIndex = i;
                     break;
                 }
             }
-            auto env = serToEnv(slice(ser, 2, pathIndex));
+            auto env = serToEnv(slice(ser, serHeaderLength, pathIndex));
             auto path = serToPath(slice(ser, pathIndex, ser.size() - 1));
             return runtime::Closure(
                 env, dynamic_cast<const syntax::LambdaNode*>(decodeNodePath(path, root)));
@@ -1588,41 +1620,48 @@ namespace serialization {
     }
 
     runtime::Layer serToLayer(
-        const Ser& ser, const runtime::Layer& parent, const syntax::ExprNode* root) {
+        const Ser& ser, const runtime::Layer* parent, const syntax::ExprNode* root) {
         // bool frame;
-        bool frame = (ser[2] == "!fr");
+        bool frame = (ser[serHeaderLength] == "!fr");
         // std::shared_ptr<Env> env;
         std::shared_ptr<runtime::Env> env;
-        int nextPos = 3;
+        int nextPos = serHeaderLength + 1;
         if (frame) {
-            for (int i = 3; i < ser.size(); i++) {
+            int serSize = ser.size();
+            int start = nextPos;
+            for (int i = start; i < serSize; i++) {
                 if (ser[i] == "]") {
                     nextPos = i + 1;
                     break;
                 }
             }
-            env = std::make_shared<runtime::Env>(serToEnv(slice(ser, 3, nextPos)));
+            env = std::make_shared<runtime::Env>(serToEnv(slice(ser, start, nextPos)));
         } else {
-            env = parent.env;
+            // this assignment must be a copy
+            env = parent->env;
         }
         // const syntax::ExprNode* expr;
         const syntax::ExprNode* expr = nullptr;
-        if (ser[nextPos + 2] != "-1") {
+        if (ser[nextPos + serHeaderLength] != "-1") {
             int start = nextPos;
-            for (int i = nextPos; i < ser.size(); i++) {
+            int serSize = ser.size();
+            for (int i = nextPos; i < serSize; i++) {
                 if (ser[i] == "]") {
                     nextPos = i + 1;
                     break;
                 }
             }
             expr = decodeNodePath(serToPath(slice(ser, start, nextPos)), root);
+        } else {
+            nextPos += (serHeaderLength + 2);
         }
         // int pc;
-        int pc = std::stoi(ser[nextPos + 2]);
-        nextPos += 4;
+        int pc = std::stoi(ser[nextPos + serHeaderLength]);
+        nextPos += (serHeaderLength + 2);
         // std::vector<syntax::Location> local;
         std::vector<syntax::Location> local;
-        for (int i = nextPos + 2; i < ser.size(); i++) {
+        int serSize = ser.size();
+        for (int i = nextPos + serHeaderLength; i < serSize; i++) {
             if (ser[i] == "]") {
                 break;
             }
@@ -1645,20 +1684,106 @@ public:
             // (2) AST construction (parsing and static analysis) (TODO: exceptions?)
             expr = syntax::parse(syntax::lex(source));
             _populateStaticAnalysisResults();
-            // (3) stack initializtion
+            // (3) stack initialization
             // the main frame (which cannot be removed by TCO)
             stack.emplace_back(std::make_shared<runtime::Env>(), nullptr, true);
             // the first expression (using the env of the main frame)
             stack.emplace_back(stack.back().env, expr);
             // (4) heap initialization
-            // skipped (preAllocate may have created some heap entries)
+            // skipped (_populateStaticAnalysisResults may have created some heap entries)
             // (5) literal boundary initialization
             numLiterals = heap.size();
             // (6) result location initialization (no result yet)
             resultLoc = -1;
         }
         else {  // origin is serialized state
-            utils::panic("serialization", "not implemented");
+            int originLen = origin.size();
+            std::string sourceLen;
+            for (int i = std::string("|{ src ").size(); i < originLen; i++) {
+                if (std::isdigit(origin[i])) {
+                    sourceLen += origin[i];
+                }
+                else {
+                    break;
+                }
+            }
+            // (1) copy source code
+            int sourceStart = 0;
+            for (int i = 0; i < originLen; i++) {
+                if (origin[i] == '^') {
+                    sourceStart = i + 1;
+                    break;
+                }
+            }
+            source = origin.substr(sourceStart, std::stoi(sourceLen));
+            // (2) AST construction (parsing and static analysis) (TODO: exceptions?)
+            expr = syntax::parse(syntax::lex(source));
+            // (3) stack initialization
+            int stackStart = sourceStart + std::stoi(sourceLen) + std::string(" } ").size();
+            // split the rest of "origin" into a "Ser"
+            serialization::Ser ser;
+            {
+                std::istringstream sin(origin.substr(stackStart, origin.size()));
+                std::string word;
+                while (sin >> word) {
+                    ser.push_back(word);
+                    // special treatment of string values
+                    if (word == "(") {
+                        sin >> word;
+                        ser.push_back(word);
+                        if (word == "sval") {
+                            sin >> word;
+                            ser.push_back(word);
+                            int len = std::stoi(word);
+                            while (sin.get() != '"')
+                                ;
+                            word = "\"";
+                            for (int i = 0; i < len - 1; i++) {
+                                word.push_back(sin.get());
+                            }
+                            ser.push_back(word);
+                        }
+                    }
+                }
+            }
+            auto stackSer = serialization::takeTo(ser, "}");
+            stackSer.pop_front();  // "{"
+            stackSer.pop_front();  // "stk"
+            while (stackSer.size() > 0 && stackSer.front() == "<") {
+                auto layerSer = serialization::takeTo(stackSer, ">");
+                stack.push_back(serialization::serToLayer(
+                    layerSer, (stack.size() ? &(stack.back()) : nullptr), expr
+                ));
+            }
+            stackSer.pop_front();  // "}"; this isn't really necessary here
+            // (4) heap initialization
+            auto heapSer = serialization::takeTo(ser, "}");
+            heapSer.pop_front();  // "{"
+            heapSer.pop_front();  // "hp"
+            while (heapSer.size() > 0 && heapSer.front() == "(") {
+                auto valueSer = serialization::takeTo(heapSer, ")");
+                heap.push_back(serialization::serToValue(
+                    valueSer, expr
+                ));
+            }
+            heapSer.pop_front();  // "}"; this isn't really necessary here
+            // (5) literal boundary initialization
+            ser.pop_front();  // "{"
+            ser.pop_front();  // "nLit"
+            numLiterals = std::stoi(ser.front());
+            ser.pop_front();  // <nLit>
+            ser.pop_front();  // "}"
+            // (6) result location initialization
+            ser.pop_front();  // "{"
+            ser.pop_front();  // "rLoc"
+            resultLoc = std::stoi(ser.front());
+            ser.pop_front();  // <rLoc>
+            ser.pop_front();  // "}"; this isn't really necessary here
+            // don't do preAlloc because heap will be reconstructed
+            // instead, do findPreAlloc to find out previously allocated locations
+            // this has to come after (5) literal boundary initialization
+            // because it needs numLiterals
+            _populateStaticAnalysisResults(false);
         }
     }
     State(const State& state) :
@@ -2035,10 +2160,11 @@ public:
         serializedState += " { rLoc ";
         serializedState += std::to_string(resultLoc);
         serializedState += " }";
-        return "|" + serializedSource + " " + serializedState + "|";
+        auto ret = "|" + serializedSource + " " + serializedState + "|";
+        return ret;
     }
 private:
-    void _populateStaticAnalysisResults() {
+    void _populateStaticAnalysisResults(bool doPreAlloc = true) {
         std::function<void(syntax::ExprNode*)> checkDuplicate =
             [](syntax::ExprNode* e) -> void {
             if (auto lnode = dynamic_cast<syntax::LambdaNode*>(e)) {
@@ -2063,17 +2189,48 @@ private:
         expr->traverse(syntax::TraversalMode::TOP_DOWN, checkDuplicate);
         expr->computeFreeVars();
         expr->computeTail(false);
-        std::function<void(syntax::ExprNode*)> preAllocate =
-            [this](syntax::ExprNode* e) -> void {
-            if (auto inode = dynamic_cast<syntax::IntegerNode*>(e)) {
-                // TODO: exceptions
-                inode->loc = this->_new<runtime::Integer>(std::stoi(inode->val));
-            }
-            else if (auto snode = dynamic_cast<syntax::StringNode*>(e)) {
-                snode->loc = this->_new<runtime::String>(syntax::unquote(snode->val));
-            }
-        };
-        expr->traverse(syntax::TraversalMode::TOP_DOWN, preAllocate);
+        if (doPreAlloc) {
+            std::function<void(syntax::ExprNode*)> preAllocate =
+                [this](syntax::ExprNode* e) -> void {
+                if (auto inode = dynamic_cast<syntax::IntegerNode*>(e)) {
+                    // TODO: exceptions
+                    inode->loc = this->_new<runtime::Integer>(std::stoi(inode->val));
+                }
+                else if (auto snode = dynamic_cast<syntax::StringNode*>(e)) {
+                    snode->loc = this->_new<runtime::String>(syntax::unquote(snode->val));
+                }
+            };
+            expr->traverse(syntax::TraversalMode::TOP_DOWN, preAllocate);
+        }
+        else {
+            std::function<void(syntax::ExprNode*)> findPreAllocate =
+                [this](syntax::ExprNode* e) -> void {
+                if (auto inode = dynamic_cast<syntax::IntegerNode*>(e)) {
+                    // TODO: exceptions
+                    for (int i = 0; i < numLiterals; i++) {
+                        if (
+                            std::holds_alternative<runtime::Integer>(heap[i]) &&
+                            std::get<runtime::Integer>(heap[i]).value == std::stoi(inode->val)
+                        ) {
+                            inode->loc = i;
+                            break;  // it's ok to find any location with the same value
+                        }
+                    }
+                }
+                else if (auto snode = dynamic_cast<syntax::StringNode*>(e)) {
+                    for (int i = 0; i < numLiterals; i++) {
+                        if (
+                            std::holds_alternative<runtime::String>(heap[i]) &&
+                            std::get<runtime::String>(heap[i]).value == syntax::unquote(snode->val)
+                        ) {
+                            snode->loc = i;
+                            break;  // it's ok to find any location with the same value
+                        }
+                    }
+                }
+            };
+            expr->traverse(syntax::TraversalMode::TOP_DOWN, findPreAllocate);
+        }
     }
     template <typename... Alt>
         requires (true && ... && (std::same_as<Alt, runtime::Value> || utils::isAlternativeOf<Alt, runtime::Value>))
@@ -2325,7 +2482,30 @@ private:
             _typecheck<runtime::String>(sl, args);
             State state(std::get<runtime::String>(heap[args[0]]).value);
             state.execute();
+            // cannot return Closure because it may
+            // refer to a node in the AST dynamically
+            // constructed from .eval's argument
+            if (std::holds_alternative<runtime::Closure>(state.getResult())) {
+                utils::panic("runtime", "returning a closure from .eval");
+            }
             return state.getResult();  // this should be a copy
+        }
+        else if (name == ".forkstate") {
+            // simulate the action of intrinsic return of Void()
+            // and record old values
+            syntax::Location oldLoc = resultLoc;
+            resultLoc = _new<runtime::Void>();
+            runtime::Layer oldStackLayer = stack.back();
+            stack.pop_back();
+            // now the state is the same as the one after the return of Void()
+            // serialize it and save it
+            std::string serializedState = serialize();
+            // revert the state back
+            resultLoc = oldLoc;
+            heap.pop_back();
+            stack.push_back(oldStackLayer);
+            // do the actual return of the serialized state
+            return runtime::String(serializedState);
         }
         else if (name == ".getchar") {
             _typecheck<>(sl, args);
@@ -2527,8 +2707,6 @@ int main(int argc, char** argv) {
         std::cout << "<end-of-stdout>\n"
             << serialization::join(
                    serialization::valueToSer(state.getResult(), state.getExpr())) << std::endl;
-        std::cerr << "***** final state serialization *****\n"
-            << state.serialize() << std::endl;
     }
     catch (const std::runtime_error& e) {
         std::cerr << e.what() << std::endl;

@@ -37,7 +37,7 @@ def test() -> None:
                 with open(iopath, "r") as f:
                     io = json.loads(f.read())
                 start = time.time()
-                res = execute(["bin/clocalc", filepath], io["in"])
+                res = execute(["bin/clo", filepath], io["in"])
                 end = time.time()
                 if (res[0] == 0 and res[1] == io["out"]):
                     print(f"OK ({end - start:.3f} seconds)")
