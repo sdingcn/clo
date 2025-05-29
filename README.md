@@ -10,6 +10,7 @@ The built-in function `.forkstate` returns
 a string encoding the entire program state,
 and when the state is resumed using `.eval` it starts
 right after the `.forkstate` call but with a return value of Void type.
+For example, the following program outputs 0, 1, 2, 2, 3 in order.
 ```
 {
   (.putstr "0\n")
@@ -23,7 +24,7 @@ right after the `.forkstate` call but with a return value of Void type.
 }
 ```
 
-The other features of this language is just a normal
+The other features of this language are just like any normal
 dynamically typed function programming language.
 ```
 letrec (
