@@ -2,7 +2,7 @@
 
 ![](https://github.com/sdingcn/clo/actions/workflows/run_test.yml/badge.svg)
 
-**Clo** is a small, dynamically typed, functional programming language.
+**Clo** is a small, dynamically-typed, garbage-collected, functional programming language.
 Here is an (incomplete) summary of its syntax.
 ```
 <comment>   := "#" [^\n]* "\n"
@@ -12,10 +12,10 @@ Here is an (incomplete) summary of its syntax.
             |  lambda ( <var>* ) <expr>
             |  letrec ( <binding>* ) <expr>
             |  if <expr> <expr> <expr>
-            |  { <expr>+ }           // sequenced evaluation
+            |  { <expr>+ }  // sequenced evaluation
             |  ( <intrinsic> <expr>* )
             |  ( <expr> <expr>* )
-            |  @ <var> <expr>        // access a var in a closure's env
+            |  @ <var> <expr>  // access var in closure's env (can simulate structs)
 ```
 
 The distinguished feature of clo is serializing
