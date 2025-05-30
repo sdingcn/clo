@@ -1,0 +1,12 @@
+letrec (
+    count lambda (n)
+        if (.<= n 0)
+        (.forkstate)
+        letrec (
+            left (.putstr (.s+ (.i->s n) "\n"))
+            state (count (.- n 1))
+            right (.putstr (.s+ (.i->s n) "\n"))
+        ) state
+)
+letrec (state (count 5))
+if (.= (.type state) 0) (.void) (.eval state)

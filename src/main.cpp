@@ -1570,7 +1570,8 @@ namespace serialization {
         else {
             int pathIndex = -1;
             int serSize = ser.size();
-            for (int i = 0; i < serSize; i++) {
+            // should start from the back because "env" also starts with "["
+            for (int i = serSize - 1; i >= 0; i--) {
                 if (ser[i] == "[") {
                     pathIndex = i;
                     break;
