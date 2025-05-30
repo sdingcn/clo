@@ -2,9 +2,23 @@
 
 ![](https://github.com/sdingcn/clo/actions/workflows/run_test.yml/badge.svg)
 
-**Clo** is an interpreted programming language.
+**Clo** is a small, dynamically typed, functional programming language.
+Here is an (incomplete) summary of its syntax.
+```
+<comment>   := "#" [^\n]* "\n"
+<intrinsic> := "." [^\s]+
+<binding>   := <var> <expr>
+<expr>      := <int-literal> | <str-literal> | <var>
+            |  lambda ( <var>* ) <expr>
+            |  letrec ( <binding>* ) <expr>
+            |  if <expr> <expr> <expr>
+            |  { <expr>+ }           // sequenced evaluation
+            |  ( <intrinsic> <expr>* )
+            |  ( <expr> <expr>* )
+            |  @ <var> <expr>        // access a var in a closure's env
+```
 
-The distinguished feature of clo is the ability to serialize
+The distinguished feature of clo is serializing
 the current program state as a string.
 The built-in function `.forkstate` returns
 a string encoding the program state,
@@ -23,18 +37,6 @@ Note: `.eval` works on both source code and serialized program state.
            (.eval state)
     }
 }
-```
-
-The other features of clo are just like any
-dynamically typed function language.
-```
-letrec (
-    sum lambda (n acc)
-        if (.< n 1)
-        acc
-        (sum (.- n 1) (.+ acc n))
-)
-(sum (.getint) 0)
 ```
 
 See [test/](test/) for more code examples (`*.clo`).
