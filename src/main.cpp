@@ -23,7 +23,7 @@
 #define DBG(x) \
     std::cerr << "[+] LINE " << __LINE__ \
               << ": " << (x) << std::endl
-// TODO: add DBG everywhere and use a macro to control it
+// TODO: add DBG everywhere and use a macro to control all of them
 
 namespace utils {
 
@@ -89,6 +89,8 @@ namespace syntax {
     // ------------------------------
 
     std::string quote(std::string s) {
+        // Note: quote will not change newlines back to
+        // the form "\\n" and thus can produce multi-line strings
         std::string r;
         r += '\"';
         for (char c : s) {
@@ -1174,6 +1176,12 @@ namespace runtime {
 
 namespace serialization {
 
+    // ------------------------------
+    // serialization and de-serialization utilities
+    // TODO: functions in this namespace do not generally
+    // have safety checks (e.g. vector out-of-bound)
+    // ------------------------------
+
     // Ser is the type of serialized program states (excluding the source code)
     using Ser = std::deque<std::string>;
     // every segment inside a Ser starts with ("{" | "<" | "[" | "(") and "<label>"
@@ -1729,6 +1737,7 @@ public:
                 while (sin >> word) {
                     ser.push_back(word);
                     // special treatment of string values
+                    // TODO: change this to a better implementation
                     if (word == "(") {
                         sin >> word;
                         ser.push_back(word);
@@ -1780,7 +1789,8 @@ public:
             resultLoc = std::stoi(ser.front());
             ser.pop_front();  // <rLoc>
             ser.pop_front();  // "}"; this isn't really necessary here
-            // don't do preAlloc because heap will be reconstructed
+            // _populateStaticAnalysisResults don't do preAlloc
+            // because heap will be reconstructed
             // instead, do findPreAlloc to find out previously allocated locations
             // this has to come after (5) literal boundary initialization
             // because it needs numLiterals
@@ -2114,6 +2124,10 @@ public:
     }
     void execute() {
         // can choose different initial values here
+        // Note: when the program state is recovered
+        // from de-serialization, the value of gc_threshold
+        // is not preserved and will re-start from this initial value
+        // when calling execute().
         int gc_threshold = numLiterals + 64;
         while (step()) {
             int total = heap.size();
@@ -2204,6 +2218,10 @@ private:
             expr->traverse(syntax::TraversalMode::TOP_DOWN, preAllocate);
         }
         else {
+            // it's ok to find any location with the same value
+            // and this is the only known (unobservable) difference
+            // between the original state and serialized-and-de-serialized state
+            // TODO: change to unique values
             std::function<void(syntax::ExprNode*)> findPreAllocate =
                 [this](syntax::ExprNode* e) -> void {
                 if (auto inode = dynamic_cast<syntax::IntegerNode*>(e)) {
@@ -2214,7 +2232,7 @@ private:
                             std::get<runtime::Integer>(heap[i]).value == std::stoi(inode->val)
                         ) {
                             inode->loc = i;
-                            break;  // it's ok to find any location with the same value
+                            break;
                         }
                     }
                 }
@@ -2225,7 +2243,7 @@ private:
                             std::get<runtime::String>(heap[i]).value == syntax::unquote(snode->val)
                         ) {
                             snode->loc = i;
-                            break;  // it's ok to find any location with the same value
+                            break;
                         }
                     }
                 }
@@ -2480,6 +2498,9 @@ private:
             return runtime::Integer(label);
         }
         else if (name == ".eval") {
+            // Note: evaluating a string as a program is one "step"
+            // and thus currently cannot be divided by the serialization
+            // in a fine-grained way.
             _typecheck<runtime::String>(sl, args);
             State state(std::get<runtime::String>(heap[args[0]]).value);
             state.execute();
@@ -2613,7 +2634,7 @@ private:
             if (relocation.contains(loc)) {
                 loc = relocation.at(loc);
             }
-            };
+        };
         // traverse the stack
         for (auto& layer : stack) {
             // only frames "own" the environments
