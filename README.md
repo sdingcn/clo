@@ -43,8 +43,12 @@ See [test/](test/) for more code examples (`*.clo`).
 
 ## dependencies
 
-This project was tested on macOS.
-But it only uses standard C++ and thus should be easy to port.
+The source code of the interpreter
+is standard C++20 and thus can be compiled
+by any C++20-conforming compiler.
+
+The current `Makefile` and `run_test.py`
+need the following dependencies.
 
 + `clang++` with C++20 support
 + `make`
