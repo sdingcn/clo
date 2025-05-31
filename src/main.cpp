@@ -77,7 +77,11 @@ namespace utils {
         const std::string& msg,
         const SourceLocation& sl = SourceLocation(0, 0)
     ) {
-        throw std::runtime_error("[" + type + " error " + sl.toString() + "] " + msg);
+        if (sl.line <= 0 || sl.column <= 0) {
+            throw std::runtime_error("[" + type + " error] " + msg);
+        } else {
+            throw std::runtime_error("[" + type + " error " + sl.toString() + "] " + msg);
+        }
     }
 
 }  // namespace utils
@@ -1758,28 +1762,34 @@ public:
         }
         else {  // origin is serialized state
             int originLen = origin.size();
-            std::string sourceLen;
+            std::string sourceLenStr;
             for (int i = std::string("|{ src ").size(); i < originLen; i++) {
                 if (std::isdigit(origin[i])) {
-                    sourceLen += origin[i];
+                    sourceLenStr += origin[i];
                 }
                 else {
                     break;
                 }
             }
             // (1) copy source code
-            int sourceStart = 0;
+            int sourceStart = 0;  // starting from 0 is a conservative choice
             for (int i = 0; i < originLen; i++) {
                 if (origin[i] == '^') {
                     sourceStart = i + 1;
                     break;
                 }
             }
-            source = origin.substr(sourceStart, std::stoi(sourceLen));
+            if (sourceStart == 0) {
+                utils::panic("serialization", "didn't find source code beginner");
+            }
+            source = origin.substr(sourceStart, std::stoi(sourceLenStr));
             // (2) AST construction (parsing and static analysis) (TODO: exceptions?)
             expr = syntax::parse(syntax::lex(source));
             // (3) stack initialization
-            int stackStart = sourceStart + std::stoi(sourceLen) + std::string(" } ").size();
+            int stackStart = sourceStart + std::stoi(sourceLenStr) + std::string(" } ").size();
+            if (stackStart >= origin.size()) {
+                utils::panic("serialization", "didn't find stack beginner");
+            }
             // split the rest of "origin" into a "Ser"
             serialization::Ser ser;
             {
@@ -1796,11 +1806,23 @@ public:
                             sin >> word;
                             ser.push_back(word);
                             int len = std::stoi(word);
-                            while (sin.get() != '"')
-                                ;
+                            while (true) {
+                                if (sin.get() == '"') {
+                                    break;
+                                }
+                                if (sin.eof()) {
+                                    utils::panic("serialization", "didn't find start of str val");
+                                }
+                            }
                             word = "\"";
                             for (int i = 0; i < len - 1; i++) {
                                 word.push_back(sin.get());
+                                if (sin.eof()) {
+                                    utils::panic("serialization", "incomplete string");
+                                }
+                            }
+                            if (word.back() != '\"') {
+                                utils::panic("serialization", "invalid string terminator");
                             }
                             ser.push_back(word);
                         }
@@ -1808,6 +1830,9 @@ public:
                 }
             }
             auto stackSer = serialization::takeTo(ser, "}");
+            if (stackSer.size() < 3) {  // { stk }
+                utils::panic("serialization", "invalid stack");
+            }
             stackSer.pop_front();  // "{"
             stackSer.pop_front();  // "stk"
             while (stackSer.size() > 0 && stackSer.front() == "<") {
@@ -1816,9 +1841,15 @@ public:
                     layerSer, (stack.size() ? &(stack.back()) : nullptr), expr
                 ));
             }
+            if (stackSer.empty() || stackSer.front() != "}") {
+                utils::panic("serialization", "invalid stack terminator");
+            }
             stackSer.pop_front();  // "}"; this isn't really necessary here
             // (4) heap initialization
             auto heapSer = serialization::takeTo(ser, "}");
+            if (heapSer.size() < 3) {  // { hp }
+                utils::panic("serialization", "invalid heap");
+            }
             heapSer.pop_front();  // "{"
             heapSer.pop_front();  // "hp"
             while (heapSer.size() > 0 && heapSer.front() == "(") {
@@ -1827,14 +1858,23 @@ public:
                     valueSer, expr
                 ));
             }
+            if (heapSer.empty() || heapSer.front() != "}") {
+                utils::panic("serialization", "invalid heap terminator");
+            }
             heapSer.pop_front();  // "}"; this isn't really necessary here
             // (5) literal boundary initialization
+            if (ser.size() < 4) {
+                utils::panic("serialization", "incomplete literal boundary");
+            }
             ser.pop_front();  // "{"
             ser.pop_front();  // "nLit"
             numLiterals = std::stoi(ser.front());
             ser.pop_front();  // <nLit>
             ser.pop_front();  // "}"
             // (6) result location initialization
+            if (ser.size() < 4) {
+                utils::panic("serialization", "incomplete result location");
+            }
             ser.pop_front();  // "{"
             ser.pop_front();  // "rLoc"
             resultLoc = std::stoi(ser.front());
