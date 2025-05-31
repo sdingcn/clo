@@ -1178,8 +1178,6 @@ namespace serialization {
 
     // ------------------------------
     // serialization and de-serialization utilities
-    // TODO: functions in this namespace do not generally
-    // have safety checks (e.g. vector out-of-bound)
     // ------------------------------
 
     // Ser is the type of serialized program states (excluding the source code)
@@ -1247,13 +1245,9 @@ namespace serialization {
     Path encodeNodePath(const syntax::ExprNode* node, const syntax::ExprNode* root) {
         if (node == nullptr) {
             utils::panic("serialization", "node is nullptr");
-            // unreachable
-            return Path();
         }
         if (root == nullptr) {
             utils::panic("serialization", "root is nullptr");
-            // unreachable
-            return Path();
         }
         Path nodePath;
         std::function<bool(Path&, const syntax::ExprNode*)>
@@ -1385,7 +1379,7 @@ namespace serialization {
                     return false;
                 }
             }
-            };
+        };
         Path currentPath;
         if (findPath(currentPath, root)) {
             return nodePath;
@@ -1398,32 +1392,40 @@ namespace serialization {
     }
 
     const syntax::ExprNode* decodeNodePath(const Path& path, const syntax::ExprNode* root) {
+        if (root == nullptr) {
+            utils::panic("serialization", "root is nullptr");
+        }
         const syntax::ExprNode* curNode = root;
+        bool failed = false;
         for (int i : path) {
             if (dynamic_cast<const syntax::IntegerNode*>(curNode)) {
-                return nullptr;
+                failed = true;
+                break;
             }
             else if (dynamic_cast<const syntax::StringNode*>(curNode)) {
-                return nullptr;
+                failed = true;
+                break;
             }
             else if (dynamic_cast<const syntax::VariableNode*>(curNode)) {
-                return nullptr;
+                failed = true;
+                break;
             }
             else if (auto lnode = dynamic_cast<const syntax::LambdaNode*>(curNode)) {
                 int numArgs = lnode->varList.size();
-                if (i < numArgs) {
+                if (0 <= i && i < numArgs) {
                     curNode = lnode->varList[i];
                 }
                 else if (i == numArgs) {
                     curNode = lnode->expr;
                 }
                 else {
-                    return nullptr;
+                    failed = true;
+                    break;
                 }
             }
             else if (auto lnode = dynamic_cast<const syntax::LetrecNode*>(curNode)) {
                 int numVars = lnode->varExprList.size();
-                if (i < numVars * 2) {
+                if (0 <= i && i < numVars * 2) {
                     int index = i / 2;
                     int offset = i % 2;
                     if (offset == 0) {
@@ -1437,7 +1439,8 @@ namespace serialization {
                     curNode = lnode->expr;
                 }
                 else {
-                    return nullptr;
+                    failed = true;
+                    break;
                 }
             }
             else if (auto inode = dynamic_cast<const syntax::IfNode*>(curNode)) {
@@ -1451,25 +1454,28 @@ namespace serialization {
                     curNode = inode->branch2;
                 }
                 else {
-                    return nullptr;
+                    failed = true;
+                    break;
                 }
             }
             else if (auto snode = dynamic_cast<const syntax::SequenceNode*>(curNode)) {
                 int numExprs = snode->exprList.size();
-                if (i < numExprs) {
+                if (0 <= i && i < numExprs) {
                     curNode = snode->exprList[i];
                 }
                 else {
-                    return nullptr;
+                    failed = true;
+                    break;
                 }
             }
             else if (auto inode = dynamic_cast<const syntax::IntrinsicCallNode*>(curNode)) {
                 int numArgs = inode->argList.size();
-                if (i < numArgs) {
+                if (0 <= i && i < numArgs) {
                     curNode = inode->argList[i];
                 }
                 else {
-                    return nullptr;
+                    failed = true;
+                    break;
                 }
             }
             else if (auto enode = dynamic_cast<const syntax::ExprCallNode*>(curNode)) {
@@ -1478,11 +1484,12 @@ namespace serialization {
                 }
                 else {
                     int numArgs = enode->argList.size();
-                    if (i <= numArgs) {
+                    if (1 <= i && i <= numArgs) {
                         curNode = enode->argList[i - 1];
                     }
                     else {
-                        return nullptr;
+                        failed = true;
+                        break;
                     }
                 }
             }
@@ -1494,12 +1501,16 @@ namespace serialization {
                     curNode = anode->expr;
                 }
                 else {
-                    return nullptr;
+                    failed = true;
+                    break;
                 }
             }
             else {
                 utils::panic("serialization", "unrecognized AST node");
             }
+        }
+        if (failed) {
+            utils::panic("serialization", "path not found");
         }
         return curNode;
     }
@@ -1516,6 +1527,9 @@ namespace serialization {
     }
 
     Path serToPath(const Ser& ser) {
+        if (ser.size() < 3) {  // [ pth ]
+            utils::panic("serialization", "ser is invalid to be converted to path");
+        }
         Path path;
         for (auto p = ser.begin() + serHeaderLength; p + 1 != ser.end(); p++) {
             path.push_back(std::stoi(*p));
@@ -1536,6 +1550,9 @@ namespace serialization {
     }
 
     runtime::Env serToEnv(const Ser& ser) {
+        if (ser.size() < 3) {  // [ env ]
+            utils::panic("serialization", "ser is invalid to be converted to env");
+        }
         runtime::Env env;
         for (auto p = ser.begin() + serHeaderLength; p + 1 != ser.end(); p += 2) {
             env.push_back(std::make_pair(*p, std::stoi(*(p + 1))));
@@ -1566,6 +1583,9 @@ namespace serialization {
     }
 
     runtime::Value serToValue(const Ser& ser, const syntax::ExprNode* root) {
+        if (ser.size() < 3) {  // ( *val )
+            utils::panic("serialization", "ser is invalid to be converted to value");
+        }
         if (ser[1] == "vval") {
             return runtime::Void();
         }
@@ -1575,7 +1595,7 @@ namespace serialization {
         else if (ser[1] == "sval") {
             return runtime::String(syntax::unquote(ser[3]));
         }
-        else {
+        else if (ser[1] == "cval") {
             int pathIndex = -1;
             int serSize = ser.size();
             // should start from the back because "env" also starts with "["
@@ -1585,10 +1605,17 @@ namespace serialization {
                     break;
                 }
             }
+            if (pathIndex == -1) {
+                utils::panic("serialization", "didn't find the start of path");
+            }
             auto env = serToEnv(slice(ser, serHeaderLength, pathIndex));
             auto path = serToPath(slice(ser, pathIndex, ser.size() - 1));
             return runtime::Closure(
                 env, dynamic_cast<const syntax::LambdaNode*>(decodeNodePath(path, root)));
+        } else {
+            utils::panic("serialization", "invalid label in ser of value");
+            // unreachable
+            return runtime::Value();
         }
     }
 
@@ -1630,7 +1657,13 @@ namespace serialization {
 
     runtime::Layer serToLayer(
         const Ser& ser, const runtime::Layer* parent, const syntax::ExprNode* root) {
+        if (ser.size() < 4) {  // < lay *fr >
+            utils::panic("serialization", "ser is invalid to be converted to layer");
+        }
         // bool frame;
+        if (!(ser[serHeaderLength] == "!fr" || ser[serHeaderLength] == "!nfr")) {
+            utils::panic("serialization", "didn't find frame label");
+        }
         bool frame = (ser[serHeaderLength] == "!fr");
         // std::shared_ptr<Env> env;
         std::shared_ptr<runtime::Env> env;
@@ -1644,14 +1677,22 @@ namespace serialization {
                     break;
                 }
             }
+            if (nextPos == serHeaderLength + 1) {
+                utils::panic("serialization", "didn't find valid env in frame layer");
+            }
             env = std::make_shared<runtime::Env>(serToEnv(slice(ser, start, nextPos)));
         } else {
-            // this assignment must be a copy
+            // this assignment must be a copy of a shared_ptr
             env = parent->env;
         }
         // const syntax::ExprNode* expr;
         const syntax::ExprNode* expr = nullptr;
+        // ser[nextPos + serHeaderLength] should at least be "]"
+        if (nextPos + serHeaderLength >= static_cast<int>(ser.size())) {
+            utils::panic("serialization", "didn't find valid path in layer");
+        }
         if (ser[nextPos + serHeaderLength] != "-1") {
+            // this includes the case of empty path ("]")
             int start = nextPos;
             int serSize = ser.size();
             for (int i = nextPos; i < serSize; i++) {
@@ -1660,14 +1701,24 @@ namespace serialization {
                     break;
                 }
             }
+            if (nextPos == start) {
+                utils::panic("serialization", "didn't find valid path end (\"]\") in layer");
+            }
             expr = decodeNodePath(serToPath(slice(ser, start, nextPos)), root);
         } else {
             nextPos += (serHeaderLength + 2);
         }
         // int pc;
+        if (nextPos + serHeaderLength >= static_cast<int>(ser.size())) {
+            utils::panic("serialization", "didn't find pc");
+        }
         int pc = std::stoi(ser[nextPos + serHeaderLength]);
         nextPos += (serHeaderLength + 2);
         // std::vector<syntax::Location> local;
+        // ser[nextPos + serHeaderLength] should at least be "]"
+        if (nextPos + serHeaderLength >= static_cast<int>(ser.size())) {
+            utils::panic("serialization", "didn't find valid lok");
+        }
         std::vector<syntax::Location> local;
         int serSize = ser.size();
         for (int i = nextPos + serHeaderLength; i < serSize; i++) {
