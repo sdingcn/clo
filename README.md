@@ -48,11 +48,7 @@ is standard C++20 and thus can be compiled
 by any C++20-conforming compiler.
 
 The current `Makefile` and `run_test.py`
-need the following dependencies.
-
-+ `clang++` with C++20 support
-+ `make`
-+ `python3` (only needed for `run_test.py`)
+need `clang++` (with C++20 support), `make`, and `python3`.
 
 ## build and run
 

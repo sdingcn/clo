@@ -2296,23 +2296,35 @@ private:
         expr->computeFreeVars();
         expr->computeTail(false);
         if (doPreAlloc) {
+            std::unordered_map<int, syntax::Location> integerLocationMap;
+            std::unordered_map<std::string, syntax::Location> stringLocationMap;
             std::function<void(syntax::ExprNode*)> preAllocate =
-                [this](syntax::ExprNode* e) -> void {
+                [this, &integerLocationMap, &stringLocationMap]
+                (syntax::ExprNode* e) -> void {
                 if (auto inode = dynamic_cast<syntax::IntegerNode*>(e)) {
                     // TODO: exceptions
-                    inode->loc = this->_new<runtime::Integer>(std::stoi(inode->val));
+                    int ival = std::stoi(inode->val);
+                    if (integerLocationMap.contains(ival)) {
+                        inode->loc = integerLocationMap.at(ival);
+                    } else {
+                        inode->loc = this->_new<runtime::Integer>(ival);
+                        integerLocationMap[ival] = inode->loc;
+                    }
                 }
                 else if (auto snode = dynamic_cast<syntax::StringNode*>(e)) {
-                    snode->loc = this->_new<runtime::String>(syntax::unquote(snode->val));
+                    std::string sval = syntax::unquote(snode->val);
+                    if (stringLocationMap.contains(sval)) {
+                        snode->loc = stringLocationMap.at(sval);
+                    } else {
+                        snode->loc = this->_new<runtime::String>(sval);
+                        stringLocationMap[sval] = snode->loc;
+                    }
                 }
             };
             expr->traverse(syntax::TraversalMode::TOP_DOWN, preAllocate);
         }
         else {
-            // it's ok to find any location with the same value
-            // and this is the only known (unobservable) difference
-            // between the original state and serialized-and-de-serialized state
-            // TODO: change to unique values
+            // the location for every different value is unique
             std::function<void(syntax::ExprNode*)> findPreAllocate =
                 [this](syntax::ExprNode* e) -> void {
                 if (auto inode = dynamic_cast<syntax::IntegerNode*>(e)) {
