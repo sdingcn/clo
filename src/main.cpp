@@ -290,7 +290,7 @@ namespace syntax {
                 utils::panic("lexer", "unsupported starting character", startsl);
             }
             return Token(startsl, std::move(text));
-            };
+        };
 
         std::deque<Token> tokens;
         while (true) {
@@ -927,7 +927,7 @@ namespace syntax {
                 std::isdigit(token.text[0]) ||
                 token.text[0] == '-' ||
                 token.text[0] == '+'
-                );
+            );
         };
         auto isStringToken = [](const Token& token) {
             return token.text.size() > 0 && token.text[0] == '"';
@@ -2616,6 +2616,7 @@ private:
             return state.getResult();  // this should be a copy
         }
         else if (name == ".forkstate") {
+            _typecheck<>(sl, args);
             // simulate the action of intrinsic return of Void()
             // and record old values
             syntax::Location oldLoc = resultLoc;
@@ -2696,7 +2697,7 @@ private:
                     }
                 }
             }
-            };
+        };
         // traverse the stack
         for (const auto& layer : stack) {
             // only frames "own" the environments

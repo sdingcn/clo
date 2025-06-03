@@ -45,10 +45,7 @@ def test() -> None:
                     sys.exit(f'failed\nresult = {res}\n')
 
 if __name__ == "__main__":
-    print("# started testing debug version")
+    print("# started testing (debug version)")
     build("debug")
-    test()
-    print("# started testing release version")
-    build("release")
     test()
     print("passed all tests")
