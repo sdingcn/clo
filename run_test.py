@@ -1,7 +1,6 @@
 import json
 import os
 import os.path
-import shutil
 import subprocess
 import sys
 import time
@@ -20,10 +19,10 @@ def build(build_type: str) -> None:
     print("building the project ... ", end = "")
     sys.stdout.flush()
     start = time.time()
-    code, _, _, = execute(["make", "-C", "src/", build_type])
-    if code:
-        sys.exit("make failed")
+    res = execute(["make", "-C", "src/", build_type])
     end = time.time()
+    if res[0]:
+        sys.exit(f"make failed\nresult = {res}")
     print(f"OK ({end - start:.3f} seconds)")
 
 def test() -> None:
@@ -42,10 +41,9 @@ def test() -> None:
                 if (res[0] == 0 and res[1] == io["out"]):
                     print(f"OK ({end - start:.3f} seconds)")
                 else:
-                    sys.exit(f'failed\nresult = {res}\n')
+                    sys.exit(f'test failed\nresult = {res}\n')
 
 if __name__ == "__main__":
-    print("# started testing (debug version)")
     build("debug")
     test()
     print("passed all tests")
