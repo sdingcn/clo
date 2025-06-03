@@ -46,7 +46,6 @@ See [test/](test/) for more code examples (`*.clo`).
 The source code of the interpreter
 is standard C++20 and thus can be compiled
 by any C++20-conforming compiler.
-
 The current `Makefile` and `run_test.py`
 need `clang++` (with C++20 support), `make`, and `python3`.
 
