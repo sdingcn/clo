@@ -24,6 +24,7 @@ The built-in function `.forkstate` returns
 a string encoding the program state,
 and when the state is resumed using `.eval` it starts
 right after the `.forkstate` call but with a return value of Void type.
+This resembles Linux's `fork`, Lisp's `call/cc`, etc.
 For example, the following program outputs 0, 1, 2, 2, 3 in order.
 Note: `.eval` works on both source code and serialized program state.
 ```
