@@ -1,6 +1,7 @@
 # clo
 
 ![](https://github.com/sdingcn/clo/actions/workflows/run_test.yml/badge.svg)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/sdingcn/clo)
 
 **Clo** is a small, dynamically-typed, garbage-collected, functional programming language.
 Here is an (incomplete) summary of its syntax.
