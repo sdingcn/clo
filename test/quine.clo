@@ -1,0 +1,30 @@
+letrec (
+    replaceFirstChar lambda (src char repl done)
+        if (.< (.s|| src) 1)
+            src
+        if done
+            src
+        letrec (
+            head (.s[] src 0 1)
+            tail (.s[] src 1 (.s|| src))
+        )
+            if (.s= head char)
+                (.s+ repl (replaceFirstChar tail char repl 1))
+                (.s+ head (replaceFirstChar tail char repl 0))
+    code "letrec (
+    replaceFirstChar lambda (src char repl done)
+        if (.< (.s|| src) 1)
+            src
+        if done
+            src
+        letrec (
+            head (.s[] src 0 1)
+            tail (.s[] src 1 (.s|| src))
+        )
+            if (.s= head char)
+                (.s+ repl (replaceFirstChar tail char repl 1))
+                (.s+ head (replaceFirstChar tail char repl 0))
+    code _
+) (.putstr (replaceFirstChar code \"_\" (.quote code) 0))
+"
+) (.putstr (replaceFirstChar code "_" (.quote code) 0))

@@ -2431,7 +2431,7 @@ private:
             int n = std::get<runtime::String>(heap[args[0]]).value.size();
             int l = std::get<runtime::Integer>(heap[args[1]]).value;
             int r = std::get<runtime::Integer>(heap[args[2]]).value;
-            if (!((0 <= l && l < n) && (0 <= r && r < n) && (l <= r))) {
+            if (!((0 <= l && l < n) && (0 <= r && r <= n) && (l <= r))) {
                 utils::panic("runtime", "invalid substring range", sl);
             }
             return runtime::String(std::get<runtime::String>(heap[args[0]]).value.substr(l, r - l));
