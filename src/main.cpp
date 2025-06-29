@@ -1166,63 +1166,69 @@ namespace serialization {
     // serialization and de-serialization utilities
     // ------------------------------
 
-    // Ser is the type of serialized program states (excluding the source code)
-    using Ser = std::deque<std::string>;
-    // every segment inside a Ser starts with ("{" | "<" | "[" | "(") and "<label>"
-    // and ends with (")" | "]" | ">" | "}")
-    // and can be nested
-    constexpr int serHeaderLength = 2;
-    // TODO: any way to optimize?
-    Ser operator,(const Ser& s1, const Ser& s2) {
-        Ser s;
-        for (auto& e : s1) {
-            s.push_back(e);
+    // Sentence is the type of serialized program states (excluding the source code)
+    using Sentence = std::deque<std::string>;
+    // every group inside a sentence is like
+    // "(" "<label>" ... ")"
+    // "[" "<label>" ... "]"
+    // "{" "<label>" ... "}"
+    // "<" "<label>" ... ">"
+    // and groups can be nested
+    // so the group header is "(" "<label>" and has length 2 (two words)
+    constexpr int groupHeaderLength = 2;
+
+    Sentence operator,(const Sentence& s1, const Sentence& s2) {
+        Sentence s;
+        for (auto& w : s1) {
+            s.push_back(w);
         }
-        for (auto& e : s2) {
-            s.push_back(e);
+        for (auto& w : s2) {
+            s.push_back(w);
         }
         return s;
     }
-    // TODO: any way to optimize?
-    Ser slice(const Ser& s0, int i, int j) {
+
+    Sentence slice(const Sentence& s0, int i, int j) {
         int s0Size = s0.size();
         if (!(0 <= i && i <= j && j <= s0Size)) {
             utils::panic("serialization", "invalid slicing");
         }
-        Ser s;
+        Sentence s;
         for (int k = i; k < j; k++) {
             s.push_back(s0[k]);
         }
         return s;
     }
-    std::string join(const Ser& s) {
-        std::string ret;
-        for (auto& e : s) {
-            if (ret != "") {
-                ret += " ";
+
+    std::string join(const Sentence& s) {
+        std::string str;
+        for (auto& w : s) {
+            if (str != "") {
+                str += " ";
             }
-            ret += e;
+            str += w;
         }
-        return ret;
+        return str;
     }
-    Ser takeTo(Ser& s, const std::string& e) {
-        Ser ret;
-        while (s.size() > 0 && s.front() != e) {
-            ret.push_back(std::move(s.front()));
-            s.pop_front();
+
+    Sentence takeTo(Sentence& s0, const std::string& w) {
+        Sentence s;
+        while (s0.size() > 0 && s0.front() != w) {
+            s.push_back(std::move(s0.front()));
+            s0.pop_front();
         }
-        if (s.size() > 0) {
-            ret.push_back(std::move(s.front()));
-            s.pop_front();
-            return ret;
+        if (s0.size() > 0) {
+            s.push_back(std::move(s0.front()));
+            s0.pop_front();
+            return s;
         } else {
             utils::panic("serialization", "takeTo failed");
             // unreachable
-            return Ser();
+            return Sentence();
         }
     }
 
-    // Path is the type of AST node locations
+    // representation of AST node location
     using Path = std::vector<int>;
 
     Path encodeNodePath(const syntax::ExprNode* node, const syntax::ExprNode* root) {
@@ -1488,52 +1494,52 @@ namespace serialization {
         return curNode;
     }
 
-    Ser pathToSer(const Path& path) {
-        Ser ser;
-        ser.push_back("[");
-        ser.push_back("pth");
+    Sentence pathToSentence(const Path& path) {
+        Sentence s;
+        s.push_back("[");
+        s.push_back("pth");
         for (int i : path) {
-            ser.push_back(std::to_string(i));
+            s.push_back(std::to_string(i));
         }
-        ser.push_back("]");
-        return ser;
+        s.push_back("]");
+        return s;
     }
 
-    Path serToPath(const Ser& ser) {
-        if (ser.size() < 3) {  // [ pth ]
-            utils::panic("serialization", "ser is invalid to be converted to path");
+    Path sentenceToPath(const Sentence& s) {
+        if (s.size() < 3) {  // shortest sentence is [ pth ]
+            utils::panic("serialization", "sentence is invalid to be converted to path");
         }
         Path path;
-        for (auto p = ser.begin() + serHeaderLength; p + 1 != ser.end(); p++) {
+        for (auto p = s.begin() + groupHeaderLength; p + 1 != s.end(); p++) {
             path.push_back(std::stoi(*p));
         }
         return path;
     }
 
-    Ser envToSer(const runtime::Env& env) {
-        Ser ser;
-        ser.push_back("[");
-        ser.push_back("env");
+    Sentence envToSentence(const runtime::Env& env) {
+        Sentence s;
+        s.push_back("[");
+        s.push_back("env");
         for (auto& p : env) {
-            ser.push_back(p.first);
-            ser.push_back(std::to_string(p.second));
+            s.push_back(p.first);
+            s.push_back(std::to_string(p.second));
         }
-        ser.push_back("]");
-        return ser;
+        s.push_back("]");
+        return s;
     }
 
-    runtime::Env serToEnv(const Ser& ser) {
-        if (ser.size() < 3) {  // [ env ]
-            utils::panic("serialization", "ser is invalid to be converted to env");
+    runtime::Env sentenceToEnv(const Sentence& s) {
+        if (s.size() < 3) {  // shortest sentence is [ env ]
+            utils::panic("serialization", "sentence is invalid to be converted to env");
         }
         runtime::Env env;
-        for (auto p = ser.begin() + serHeaderLength; p + 1 != ser.end(); p += 2) {
+        for (auto p = s.begin() + groupHeaderLength; p + 1 != s.end(); p += 2) {
             env.push_back(std::make_pair(*p, std::stoi(*(p + 1))));
         }
         return env;
     }
 
-    Ser valueToSer(const runtime::Value& v, const syntax::ExprNode* root) {
+    Sentence valueToSentence(const runtime::Value& v, const syntax::ExprNode* root) {
         if (std::holds_alternative<runtime::Void>(v)) {
             return {"(", "vval", ")"};
         }
@@ -1549,31 +1555,32 @@ namespace serialization {
         }
         else {
             auto c = std::get<runtime::Closure>(v);
-            Ser head = {"(", "cval"};
-            Ser tail = {")"};
-            return (head, envToSer(c.env), pathToSer(encodeNodePath(c.fun, root)), tail);
+            Sentence head = {"(", "cval"};
+            Sentence tail = {")"};
+            return (head, envToSentence(c.env), pathToSentence(encodeNodePath(c.fun, root)), tail);
         }
     }
 
-    runtime::Value serToValue(const Ser& ser, const syntax::ExprNode* root) {
-        if (ser.size() < 3) {  // ( *val )
-            utils::panic("serialization", "ser is invalid to be converted to value");
+    runtime::Value sentenceToValue(const Sentence& s, const syntax::ExprNode* root) {
+        if (s.size() < 3) {  // shortest sentence is ( vval )
+            utils::panic("serialization", "sentence is invalid to be converted to value");
         }
-        if (ser[1] == "vval") {
+        if (s[1] == "vval") {
             return runtime::Void();
         }
-        else if (ser[1] == "ival") {
-            return runtime::Integer(std::stoi(ser[2]));
+        else if (s[1] == "ival") {
+            return runtime::Integer(std::stoi(s[2]));
         }
-        else if (ser[1] == "sval") {
-            return runtime::String(syntax::unquote(ser[3]));
+        else if (s[1] == "sval") {
+            return runtime::String(syntax::unquote(s[3]));
         }
-        else if (ser[1] == "cval") {
+        else if (s[1] == "cval") {
             int pathIndex = -1;
-            int serSize = ser.size();
+            int sentenceSize = s.size();
+            // finding the start of path
             // should start from the back because "env" also starts with "["
-            for (int i = serSize - 1; i >= 0; i--) {
-                if (ser[i] == "[") {
+            for (int i = sentenceSize - 1; i >= 0; i--) {
+                if (s[i] == "[") {
                     pathIndex = i;
                     break;
                 }
@@ -1581,19 +1588,19 @@ namespace serialization {
             if (pathIndex == -1) {
                 utils::panic("serialization", "didn't find the start of path");
             }
-            auto env = serToEnv(slice(ser, serHeaderLength, pathIndex));
-            auto path = serToPath(slice(ser, pathIndex, ser.size() - 1));
+            auto env = sentenceToEnv(slice(s, groupHeaderLength, pathIndex));
+            auto path = sentenceToPath(slice(s, pathIndex, s.size() - 1));
             return runtime::Closure(
                 env, dynamic_cast<const syntax::LambdaNode*>(decodeNodePath(path, root)));
         } else {
-            utils::panic("serialization", "invalid label in ser of value");
+            utils::panic("serialization", "invalid label in the sentence as a value");
             // unreachable
             return runtime::Value();
         }
     }
 
-    Ser layerToSer(const runtime::Layer& layer, const syntax::ExprNode* root) {
-        Ser serializedLayer = {"<", "lay"};
+    Sentence layerToSentence(const runtime::Layer& layer, const syntax::ExprNode* root) {
+        Sentence serializedLayer = {"<", "lay"};
         // bool frame;
         if (layer.frame) {
             serializedLayer.push_back("!fr");
@@ -1603,73 +1610,75 @@ namespace serialization {
         }
         // std::shared_ptr<Env> env;
         if (layer.frame) {
-            serializedLayer = (serializedLayer, envToSer(*(layer.env)));
+            serializedLayer = (serializedLayer, envToSentence(*(layer.env)));
         }
         // const syntax::ExprNode *expr;
         if (layer.expr != nullptr) {
-            serializedLayer = (serializedLayer, pathToSer(encodeNodePath(layer.expr, root)));
+            serializedLayer = (serializedLayer, pathToSentence(encodeNodePath(layer.expr, root)));
         }
         else {
-            Ser dummyPathSer = {"[", "pth", "-1", "]"};
-            serializedLayer = (serializedLayer, dummyPathSer);
+            // the case of main frame
+            Sentence dummyPathSentence = {"[", "pth", "-1", "]"};
+            serializedLayer = (serializedLayer, dummyPathSentence);
         }
         // int pc;
-        Ser pcSer = {"(", "pc", std::to_string(layer.pc), ")"};
-        serializedLayer = (serializedLayer, pcSer);
+        Sentence pcSentence = {"(", "pc", std::to_string(layer.pc), ")"};
+        serializedLayer = (serializedLayer, pcSentence);
         // std::vector<Location> local;
-        Ser head = {"[", "lok"};
-        Ser body;
+        Sentence head = {"[", "lok"};
+        Sentence body;
         for (auto& l : layer.local) {
             body.push_back(std::to_string(l));
         }
-        Ser tail = {"]"};
-        Ser end = {">"};
+        Sentence tail = {"]"};
+        Sentence end = {">"};
         serializedLayer = (serializedLayer, head, body, tail, end);
         return serializedLayer;
     }
 
-    runtime::Layer serToLayer(
-        const Ser& ser, const runtime::Layer* parent, const syntax::ExprNode* root) {
-        if (ser.size() < 4) {  // < lay *fr >
-            utils::panic("serialization", "ser is invalid to be converted to layer");
+    runtime::Layer sentenceToLayer(
+        const Sentence& s, const runtime::Layer* parent, const syntax::ExprNode* root) {
+        if (s.size() < 4) {  // shortest sentence is < lay *fr >
+            utils::panic("serialization", "sentence is invalid to be converted to layer");
         }
         // bool frame;
-        if (!(ser[serHeaderLength] == "!fr" || ser[serHeaderLength] == "!nfr")) {
-            utils::panic("serialization", "didn't find frame label");
+        if (!(s[groupHeaderLength] == "!fr" || s[groupHeaderLength] == "!nfr")) {
+            utils::panic("serialization", "didn't find a valid frame label");
         }
-        bool frame = (ser[serHeaderLength] == "!fr");
+        bool frame = (s[groupHeaderLength] == "!fr");
         // std::shared_ptr<Env> env;
         std::shared_ptr<runtime::Env> env;
-        int nextPos = serHeaderLength + 1;
+        int nextPos = groupHeaderLength + 1;
         if (frame) {
-            int serSize = ser.size();
+            int sentenceSize = s.size();
             int start = nextPos;
-            for (int i = start; i < serSize; i++) {
-                if (ser[i] == "]") {
+            for (int i = start; i < sentenceSize; i++) {
+                if (s[i] == "]") {
                     nextPos = i + 1;
                     break;
                 }
             }
-            if (nextPos == serHeaderLength + 1) {
+            if (nextPos == groupHeaderLength + 1) {
                 utils::panic("serialization", "didn't find valid env in frame layer");
             }
-            env = std::make_shared<runtime::Env>(serToEnv(slice(ser, start, nextPos)));
+            env = std::make_shared<runtime::Env>(sentenceToEnv(slice(s, start, nextPos)));
         } else {
-            // this assignment must be a copy of a shared_ptr
+            // this layer doesn't own an Env
+            // this assignment is a copy of a shared_ptr
             env = parent->env;
         }
         // const syntax::ExprNode* expr;
         const syntax::ExprNode* expr = nullptr;
-        // ser[nextPos + serHeaderLength] should at least be "]"
-        if (nextPos + serHeaderLength >= static_cast<int>(ser.size())) {
+        // s[nextPos + groupHeaderLength] should at least be "]"
+        if (nextPos + groupHeaderLength >= static_cast<int>(s.size())) {
             utils::panic("serialization", "didn't find valid path in layer");
         }
-        if (ser[nextPos + serHeaderLength] != "-1") {
+        if (s[nextPos + groupHeaderLength] != "-1") {
             // this includes the case of empty path ("]")
             int start = nextPos;
-            int serSize = ser.size();
+            int serSize = s.size();
             for (int i = nextPos; i < serSize; i++) {
-                if (ser[i] == "]") {
+                if (s[i] == "]") {
                     nextPos = i + 1;
                     break;
                 }
@@ -1677,28 +1686,29 @@ namespace serialization {
             if (nextPos == start) {
                 utils::panic("serialization", "didn't find valid path end (\"]\") in layer");
             }
-            expr = decodeNodePath(serToPath(slice(ser, start, nextPos)), root);
+            expr = decodeNodePath(sentenceToPath(slice(s, start, nextPos)), root);
         } else {
-            nextPos += (serHeaderLength + 2);
+            // dummy path (for the main frame)
+            nextPos += (groupHeaderLength + 2);
         }
         // int pc;
-        if (nextPos + serHeaderLength >= static_cast<int>(ser.size())) {
+        if (nextPos + groupHeaderLength >= static_cast<int>(s.size())) {
             utils::panic("serialization", "didn't find pc");
         }
-        int pc = std::stoi(ser[nextPos + serHeaderLength]);
-        nextPos += (serHeaderLength + 2);
+        int pc = std::stoi(s[nextPos + groupHeaderLength]);
+        nextPos += (groupHeaderLength + 2);
         // std::vector<syntax::Location> local;
-        // ser[nextPos + serHeaderLength] should at least be "]"
-        if (nextPos + serHeaderLength >= static_cast<int>(ser.size())) {
+        // s[nextPos + groupHeaderLength] should at least be "]"
+        if (nextPos + groupHeaderLength >= static_cast<int>(s.size())) {
             utils::panic("serialization", "didn't find valid lok");
         }
         std::vector<syntax::Location> local;
-        int serSize = ser.size();
-        for (int i = nextPos + serHeaderLength; i < serSize; i++) {
-            if (ser[i] == "]") {
+        int sentenceSize = s.size();
+        for (int i = nextPos + groupHeaderLength; i < sentenceSize; i++) {
+            if (s[i] == "]") {
                 break;
             }
-            local.push_back(std::stoi(ser[i]));
+            local.push_back(std::stoi(s[i]));
         }
         return runtime::Layer(std::move(env), expr, frame, pc, std::move(local));
     }
@@ -1759,21 +1769,21 @@ public:
             if (stackStart >= origin.size()) {
                 utils::panic("serialization", "didn't find stack beginner");
             }
-            // split the rest of "origin" into a "Ser"
-            serialization::Ser ser;
+            // split the rest of "origin" into a "Sentence"
+            serialization::Sentence sentence;
             {
                 std::istringstream sin(origin.substr(stackStart, origin.size()));
                 std::string word;
                 while (sin >> word) {
-                    ser.push_back(word);
+                    sentence.push_back(word);
                     // special treatment of string values
                     // TODO: change this to a better implementation
                     if (word == "(") {
                         sin >> word;
-                        ser.push_back(word);
+                        sentence.push_back(word);
                         if (word == "sval") {
                             sin >> word;
-                            ser.push_back(word);
+                            sentence.push_back(word);
                             int len = std::stoi(word);
                             while (true) {
                                 if (sin.get() == '"') {
@@ -1793,62 +1803,62 @@ public:
                             if (word.back() != '\"') {
                                 utils::panic("serialization", "invalid string terminator");
                             }
-                            ser.push_back(word);
+                            sentence.push_back(word);
                         }
                     }
                 }
             }
-            auto stackSer = serialization::takeTo(ser, "}");
-            if (stackSer.size() < 3) {  // { stk }
+            auto stackSentence = serialization::takeTo(sentence, "}");
+            if (stackSentence.size() < 3) {  // { stk }
                 utils::panic("serialization", "invalid stack");
             }
-            stackSer.pop_front();  // "{"
-            stackSer.pop_front();  // "stk"
-            while (stackSer.size() > 0 && stackSer.front() == "<") {
-                auto layerSer = serialization::takeTo(stackSer, ">");
-                stack.push_back(serialization::serToLayer(
-                    layerSer, (stack.size() ? &(stack.back()) : nullptr), expr
+            stackSentence.pop_front();  // "{"
+            stackSentence.pop_front();  // "stk"
+            while (stackSentence.size() > 0 && stackSentence.front() == "<") {
+                auto layerSentence = serialization::takeTo(stackSentence, ">");
+                stack.push_back(serialization::sentenceToLayer(
+                    layerSentence, (stack.size() ? &(stack.back()) : nullptr), expr
                 ));
             }
-            if (stackSer.empty() || stackSer.front() != "}") {
+            if (stackSentence.empty() || stackSentence.front() != "}") {
                 utils::panic("serialization", "invalid stack terminator");
             }
-            stackSer.pop_front();  // "}"; this isn't really necessary here
+            stackSentence.pop_front();  // "}"; this isn't really necessary here
             // (4) heap initialization
-            auto heapSer = serialization::takeTo(ser, "}");
-            if (heapSer.size() < 3) {  // { hp }
+            auto heapSentence = serialization::takeTo(sentence, "}");
+            if (heapSentence.size() < 3) {  // { hp }
                 utils::panic("serialization", "invalid heap");
             }
-            heapSer.pop_front();  // "{"
-            heapSer.pop_front();  // "hp"
-            while (heapSer.size() > 0 && heapSer.front() == "(") {
-                auto valueSer = serialization::takeTo(heapSer, ")");
-                heap.push_back(serialization::serToValue(
-                    valueSer, expr
+            heapSentence.pop_front();  // "{"
+            heapSentence.pop_front();  // "hp"
+            while (heapSentence.size() > 0 && heapSentence.front() == "(") {
+                auto valueSentence = serialization::takeTo(heapSentence, ")");
+                heap.push_back(serialization::sentenceToValue(
+                    valueSentence, expr
                 ));
             }
-            if (heapSer.empty() || heapSer.front() != "}") {
+            if (heapSentence.empty() || heapSentence.front() != "}") {
                 utils::panic("serialization", "invalid heap terminator");
             }
-            heapSer.pop_front();  // "}"; this isn't really necessary here
+            heapSentence.pop_front();  // "}"; this isn't really necessary here
             // (5) literal boundary initialization
-            if (ser.size() < 4) {
+            if (sentence.size() < 4) {
                 utils::panic("serialization", "incomplete literal boundary");
             }
-            ser.pop_front();  // "{"
-            ser.pop_front();  // "nLit"
-            numLiterals = std::stoi(ser.front());
-            ser.pop_front();  // <nLit>
-            ser.pop_front();  // "}"
+            sentence.pop_front();  // "{"
+            sentence.pop_front();  // "nLit"
+            numLiterals = std::stoi(sentence.front());
+            sentence.pop_front();  // <nLit>
+            sentence.pop_front();  // "}"
             // (6) result location initialization
-            if (ser.size() < 4) {
+            if (sentence.size() < 4) {
                 utils::panic("serialization", "incomplete result location");
             }
-            ser.pop_front();  // "{"
-            ser.pop_front();  // "rLoc"
-            resultLoc = std::stoi(ser.front());
-            ser.pop_front();  // <rLoc>
-            ser.pop_front();  // "}"; this isn't really necessary here
+            sentence.pop_front();  // "{"
+            sentence.pop_front();  // "rLoc"
+            resultLoc = std::stoi(sentence.front());
+            sentence.pop_front();  // <rLoc>
+            sentence.pop_front();  // "}"; this isn't really necessary here
             // _populateStaticAnalysisResults don't do preAlloc
             // because heap will be reconstructed
             // instead, do findPreAlloc to find out previously allocated locations
@@ -2180,14 +2190,14 @@ public:
         serializedState += "{ stk";
         for (auto& layer : stack) {
             serializedState += " ";
-            serializedState += serialization::join(serialization::layerToSer(layer, expr));
+            serializedState += serialization::join(serialization::layerToSentence(layer, expr));
         }
         serializedState += " }";
         // std::vector<Value> heap;
         serializedState += " { hp";
         for (auto& value : heap) {
             serializedState += " ";
-            serializedState += serialization::join(serialization::valueToSer(value, expr));
+            serializedState += serialization::join(serialization::valueToSentence(value, expr));
         }
         serializedState += " }";
         // int numLiterals;
@@ -2702,7 +2712,7 @@ int main(int argc, char** argv) {
         state.execute();
         std::cout << "<end-of-stdout>\n"
             << serialization::join(
-                   serialization::valueToSer(state.getResult(), state.getExpr())) << std::endl;
+                   serialization::valueToSentence(state.getResult(), state.getExpr())) << std::endl;
     }
     catch (const std::runtime_error& e) {
         std::cerr << e.what() << std::endl;

@@ -1,9 +1,9 @@
-name: run_test
+name: CI
 on: [push]
 jobs:
   test:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - run: python3 run_test.py
+      - run: python3 CI.py
         working-directory: .
