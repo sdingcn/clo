@@ -1777,34 +1777,29 @@ public:
                 while (sin >> word) {
                     sentence.push_back(word);
                     // special treatment of string values
-                    // TODO: change this to a better implementation
-                    if (word == "(") {
+                    if (word == "sval" && sentence.size() > 1 && *(sentence.rbegin() + 1) == "(") {
                         sin >> word;
                         sentence.push_back(word);
-                        if (word == "sval") {
-                            sin >> word;
-                            sentence.push_back(word);
-                            int len = std::stoi(word);
-                            while (true) {
-                                if (sin.get() == '"') {
-                                    break;
-                                }
-                                if (sin.eof()) {
-                                    utils::panic("serialization", "didn't find start of str val");
-                                }
+                        int len = std::stoi(word);
+                        while (true) {
+                            if (sin.get() == '"') {
+                                break;
                             }
-                            word = "\"";
-                            for (int i = 0; i < len - 1; i++) {
-                                word.push_back(sin.get());
-                                if (sin.eof()) {
-                                    utils::panic("serialization", "incomplete string");
-                                }
+                            if (sin.eof()) {
+                                utils::panic("serialization", "didn't find start of str val");
                             }
-                            if (word.back() != '\"') {
-                                utils::panic("serialization", "invalid string terminator");
-                            }
-                            sentence.push_back(word);
                         }
+                        word = "\"";
+                        for (int i = 0; i < len - 1; i++) {
+                            word.push_back(sin.get());
+                            if (sin.eof()) {
+                                utils::panic("serialization", "incomplete string");
+                            }
+                        }
+                        if (word.back() != '"') {
+                            utils::panic("serialization", "invalid string terminator");
+                        }
+                        sentence.push_back(word);
                     }
                 }
             }
@@ -2179,6 +2174,7 @@ public:
     const syntax::ExprNode* getExpr() const {
         return expr;
     }
+    // TODO: record GC state?
     std::string serialize() const {
         // std::string source;
         std::string serializedSource =

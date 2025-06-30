@@ -1,21 +1,19 @@
 # clo
 
 ![](https://github.com/sdingcn/clo/actions/workflows/CI.yml/badge.svg)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/sdingcn/clo)
 
 **Clo** is a small, dynamically-typed, garbage-collected, functional programming language.
-Here is its syntax.
 ```
 <comment>   := "#" [^\n]* "\n"
 <intrinsic> := "." [^\s]+
 <binding>   := <var> <expr>
+<callee>    := <intrinsic> | <expr>
 <expr>      := <int-literal> | <str-literal> | <var>
             |  lambda ( <var>* ) <expr>
             |  letrec ( <binding>* ) <expr>
             |  if <expr> <expr> <expr>
             |  { <expr>+ }  // sequenced evaluation
-            |  ( <intrinsic> <expr>* )
-            |  ( <expr> <expr>* )
+            |  ( <callee> <expr>* )
             |  @ <var> <expr>  // access var in closure's env (can simulate structs)
 ```
 
@@ -49,7 +47,7 @@ The source code of the interpreter
 is standard C++20 and thus can be compiled
 by any C++20-conforming compiler.
 The current `Makefile` and `CI.py`
-need `clang++` (with C++20 support), `make`, and `python3`.
+need `clang++` with C++20 support (for sanitizer), `make`, and `python3`.
 
 ## build and run
 
