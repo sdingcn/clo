@@ -349,6 +349,7 @@ namespace syntax {
             auto inode = new IntegerNode(sl, val);
             inode->freeVars = freeVars;
             inode->tail = tail;
+            inode->loc = loc;
             return inode;
         }
         virtual void traverse(
@@ -381,6 +382,7 @@ namespace syntax {
             auto snode = new StringNode(sl, val);
             snode->freeVars = freeVars;
             snode->tail = tail;
+            snode->loc = loc;
             return snode;
         }
         virtual void traverse(
@@ -1139,7 +1141,7 @@ namespace runtime {
         // a default argument is evaluated each time the function is called without
         // that argument (not important here)
         Layer(
-            std::shared_ptr<Env> e = nullptr,
+            Env e = Env(),
             const syntax::ExprNode* x = nullptr,
             bool f = false,
             int p = 0,
@@ -1150,7 +1152,7 @@ namespace runtime {
         // whether this is a frame
         bool frame;
         // one env per frame (closure call layer)
-        std::shared_ptr<Env> env;
+        Env env;
         const syntax::ExprNode* expr;
         // program counter inside this expr
         int pc;
@@ -1494,6 +1496,15 @@ namespace serialization {
         return curNode;
     }
 
+    const syntax::ExprNode* migrateASTNode(
+        const syntax::ExprNode* root1,
+        const syntax::ExprNode* root2,
+        const syntax::ExprNode* node1
+    ) {
+        auto path = encodeNodePath(node1, root1);
+        return decodeNodePath(path, root2);
+    }
+
     Sentence pathToSentence(const Path& path) {
         Sentence s;
         s.push_back("[");
@@ -1610,7 +1621,7 @@ namespace serialization {
         }
         // std::shared_ptr<Env> env;
         if (layer.frame) {
-            serializedLayer = (serializedLayer, envToSentence(*(layer.env)));
+            serializedLayer = (serializedLayer, envToSentence(layer.env));
         }
         // const syntax::ExprNode *expr;
         if (layer.expr != nullptr) {
@@ -1637,7 +1648,7 @@ namespace serialization {
     }
 
     runtime::Layer sentenceToLayer(
-        const Sentence& s, const runtime::Layer* parent, const syntax::ExprNode* root) {
+        const Sentence& s, const syntax::ExprNode* root) {
         if (s.size() < 4) {  // shortest sentence is < lay *fr >
             utils::panic("serialization", "sentence is invalid to be converted to layer");
         }
@@ -1646,8 +1657,8 @@ namespace serialization {
             utils::panic("serialization", "didn't find a valid frame label");
         }
         bool frame = (s[groupHeaderLength] == "!fr");
-        // std::shared_ptr<Env> env;
-        std::shared_ptr<runtime::Env> env;
+        // Env env;
+        runtime::Env env;
         int nextPos = groupHeaderLength + 1;
         if (frame) {
             int sentenceSize = s.size();
@@ -1661,11 +1672,7 @@ namespace serialization {
             if (nextPos == groupHeaderLength + 1) {
                 utils::panic("serialization", "didn't find valid env in frame layer");
             }
-            env = std::make_shared<runtime::Env>(sentenceToEnv(slice(s, start, nextPos)));
-        } else {
-            // this layer doesn't own an Env
-            // this assignment is a copy of a shared_ptr
-            env = parent->env;
+            env = sentenceToEnv(slice(s, start, nextPos));
         }
         // const syntax::ExprNode* expr;
         const syntax::ExprNode* expr = nullptr;
@@ -1716,498 +1723,6 @@ namespace serialization {
 }  // namespace serialization
 
 class State {
-public:
-    State(std::string origin) {
-        if (origin.size() == 0) {
-            utils::panic("state constructor", "empty origin string");
-        }
-        else if (origin[0] != '|') {  // origin is source code
-            // (1) copy source code
-            source = std::move(origin);
-            // (2) AST construction (parsing and static analysis) (TODO: exceptions?)
-            expr = syntax::parse(syntax::lex(source));
-            _populateStaticAnalysisResults();
-            // (3) stack initialization
-            // the main frame (which cannot be removed by TCO)
-            stack.emplace_back(std::make_shared<runtime::Env>(), nullptr, true);
-            // the first expression (using the env of the main frame)
-            stack.emplace_back(stack.back().env, expr);
-            // (4) heap initialization
-            // skipped (_populateStaticAnalysisResults may have created some heap entries)
-            // (5) literal boundary initialization
-            numLiterals = heap.size();
-            // (6) result location initialization (no result yet)
-            resultLoc = -1;
-        }
-        else {  // origin is serialized state
-            int originLen = origin.size();
-            std::string sourceLenStr;
-            for (int i = std::string("|{ src ").size(); i < originLen; i++) {
-                if (std::isdigit(origin[i])) {
-                    sourceLenStr += origin[i];
-                }
-                else {
-                    break;
-                }
-            }
-            // (1) copy source code
-            int sourceStart = 0;  // starting from 0 is a conservative choice
-            for (int i = 0; i < originLen; i++) {
-                if (origin[i] == '^') {
-                    sourceStart = i + 1;
-                    break;
-                }
-            }
-            if (sourceStart == 0) {
-                utils::panic("serialization", "didn't find source code beginner");
-            }
-            source = origin.substr(sourceStart, std::stoi(sourceLenStr));
-            // (2) AST construction (parsing and static analysis) (TODO: exceptions?)
-            expr = syntax::parse(syntax::lex(source));
-            // (3) stack initialization
-            int stackStart = sourceStart + std::stoi(sourceLenStr) + std::string(" } ").size();
-            if (stackStart >= origin.size()) {
-                utils::panic("serialization", "didn't find stack beginner");
-            }
-            // split the rest of "origin" into a "Sentence"
-            serialization::Sentence sentence;
-            {
-                std::istringstream sin(origin.substr(stackStart, origin.size()));
-                std::string word;
-                while (sin >> word) {
-                    sentence.push_back(word);
-                    // special treatment of string values
-                    if (word == "sval" && sentence.size() > 1 && *(sentence.rbegin() + 1) == "(") {
-                        sin >> word;
-                        sentence.push_back(word);
-                        int len = std::stoi(word);
-                        while (true) {
-                            if (sin.get() == '"') {
-                                break;
-                            }
-                            if (sin.eof()) {
-                                utils::panic("serialization", "didn't find start of str val");
-                            }
-                        }
-                        word = "\"";
-                        for (int i = 0; i < len - 1; i++) {
-                            word.push_back(sin.get());
-                            if (sin.eof()) {
-                                utils::panic("serialization", "incomplete string");
-                            }
-                        }
-                        if (word.back() != '"') {
-                            utils::panic("serialization", "invalid string terminator");
-                        }
-                        sentence.push_back(word);
-                    }
-                }
-            }
-            auto stackSentence = serialization::takeTo(sentence, "}");
-            if (stackSentence.size() < 3) {  // { stk }
-                utils::panic("serialization", "invalid stack");
-            }
-            stackSentence.pop_front();  // "{"
-            stackSentence.pop_front();  // "stk"
-            while (stackSentence.size() > 0 && stackSentence.front() == "<") {
-                auto layerSentence = serialization::takeTo(stackSentence, ">");
-                stack.push_back(serialization::sentenceToLayer(
-                    layerSentence, (stack.size() ? &(stack.back()) : nullptr), expr
-                ));
-            }
-            if (stackSentence.empty() || stackSentence.front() != "}") {
-                utils::panic("serialization", "invalid stack terminator");
-            }
-            stackSentence.pop_front();  // "}"; this isn't really necessary here
-            // (4) heap initialization
-            auto heapSentence = serialization::takeTo(sentence, "}");
-            if (heapSentence.size() < 3) {  // { hp }
-                utils::panic("serialization", "invalid heap");
-            }
-            heapSentence.pop_front();  // "{"
-            heapSentence.pop_front();  // "hp"
-            while (heapSentence.size() > 0 && heapSentence.front() == "(") {
-                auto valueSentence = serialization::takeTo(heapSentence, ")");
-                heap.push_back(serialization::sentenceToValue(
-                    valueSentence, expr
-                ));
-            }
-            if (heapSentence.empty() || heapSentence.front() != "}") {
-                utils::panic("serialization", "invalid heap terminator");
-            }
-            heapSentence.pop_front();  // "}"; this isn't really necessary here
-            // (5) literal boundary initialization
-            if (sentence.size() < 4) {
-                utils::panic("serialization", "incomplete literal boundary");
-            }
-            sentence.pop_front();  // "{"
-            sentence.pop_front();  // "nLit"
-            numLiterals = std::stoi(sentence.front());
-            sentence.pop_front();  // <nLit>
-            sentence.pop_front();  // "}"
-            // (6) result location initialization
-            if (sentence.size() < 4) {
-                utils::panic("serialization", "incomplete result location");
-            }
-            sentence.pop_front();  // "{"
-            sentence.pop_front();  // "rLoc"
-            resultLoc = std::stoi(sentence.front());
-            sentence.pop_front();  // <rLoc>
-            sentence.pop_front();  // "}"; this isn't really necessary here
-            // _populateStaticAnalysisResults don't do preAlloc
-            // because heap will be reconstructed
-            // instead, do findPreAlloc to find out previously allocated locations
-            // this has to come after (5) literal boundary initialization
-            // because it needs numLiterals
-            _populateStaticAnalysisResults(false);
-        }
-    }
-    State(const State& state) :
-        source(state.source),
-        expr(state.expr->clone()),
-        stack(state.stack),
-        heap(state.heap),
-        numLiterals(state.numLiterals),
-        resultLoc(state.resultLoc) {
-    }
-    State& operator=(const State& state) {
-        if (this != &state) {
-            source = state.source;
-            delete expr;
-            expr = state.expr->clone();
-            stack = state.stack;
-            heap = state.heap;
-            numLiterals = state.numLiterals;
-            resultLoc = state.resultLoc;
-        }
-        return *this;
-    }
-    State(State&& state) :
-        source(std::move(state.source)),
-        expr(state.expr),
-        stack(std::move(state.stack)),
-        heap(std::move(state.heap)),
-        numLiterals(state.numLiterals),
-        resultLoc(state.resultLoc) {
-        state.expr = nullptr;
-    }
-    State& operator=(State&& state) {
-        if (this != &state) {
-            source = std::move(state.source);
-            delete expr;
-            expr = state.expr;
-            state.expr = nullptr;
-            stack = std::move(state.stack);
-            heap = std::move(state.heap);
-            numLiterals = state.numLiterals;
-            resultLoc = state.resultLoc;
-        }
-        return *this;
-    }
-    ~State() {
-        if (expr != nullptr) {
-            delete expr;
-        }
-    }
-
-    // returns true iff the step is completed without reaching the end of evaluation
-    bool step() {
-        // be careful! this reference may be invalidated after modifying the stack
-        // so always keep stack change as the last operation(s)
-        auto& layer = stack.back();
-        // main frame; end of evaluation
-        if (layer.expr == nullptr) {
-            return false;
-        }
-        // evaluations for every case
-        if (auto inode = dynamic_cast<const syntax::IntegerNode*>(layer.expr)) {
-            resultLoc = inode->loc;
-            stack.pop_back();
-        }
-        else if (auto snode = dynamic_cast<const syntax::StringNode*>(layer.expr)) {
-            resultLoc = snode->loc;
-            stack.pop_back();
-        }
-        else if (auto vnode = dynamic_cast<const syntax::VariableNode*>(layer.expr)) {
-            auto varName = vnode->name;
-            auto loc = runtime::lookup(varName, *(layer.env));
-            if (!loc.has_value()) {
-                _errorStack();
-                utils::panic("runtime", "undefined variable " + varName, layer.expr->sl);
-            }
-            resultLoc = loc.value();
-            stack.pop_back();
-        }
-        else if (auto lnode = dynamic_cast<const syntax::LambdaNode*>(layer.expr)) {
-            // copy the statically used part of the env into the closure
-            runtime::Env savedEnv;
-            // copy
-            auto usedVars = lnode->freeVars;
-            for (auto ptr = layer.env->rbegin(); ptr != layer.env->rend(); ptr++) {
-                if (usedVars.empty()) {
-                    break;
-                }
-                if (usedVars.contains(ptr->first)) {
-                    savedEnv.push_back(*ptr);
-                    usedVars.erase(ptr->first);
-                }
-            }
-            std::reverse(savedEnv.begin(), savedEnv.end());
-            resultLoc = _new<runtime::Closure>(savedEnv, lnode);
-            stack.pop_back();
-        }
-        else if (auto lnode = dynamic_cast<const syntax::LetrecNode*>(layer.expr)) {
-            // unified argument recording
-            if (layer.pc > 1 && layer.pc <= static_cast<int>(lnode->varExprList.size()) + 1) {
-                auto varName = lnode->varExprList[layer.pc - 2].first->name;
-                auto loc = runtime::lookup(varName, *(layer.env));
-                // this shouldn't happen since those variables are newly introduced by letrec
-                if (!loc.has_value()) {
-                    _errorStack();
-                    utils::panic("runtime", "undefined variable " + varName, layer.expr->sl);
-                }
-                // copy (inherited resultLoc)
-                heap[loc.value()] = heap[resultLoc];
-            }
-            // create all new locations
-            if (layer.pc == 0) {
-                layer.pc++;
-                for (const auto& [var, _] : lnode->varExprList) {
-                    layer.env->push_back(std::make_pair(var->name, _new<runtime::Void>()));
-                }
-                // evaluate bindings
-            }
-            else if (layer.pc <= static_cast<int>(lnode->varExprList.size())) {
-                layer.pc++;
-                // note: growing the stack might invalidate the reference "layer"
-                //       but this is fine since next time "layer" will be re-bound
-                stack.emplace_back(layer.env, lnode->varExprList[layer.pc - 2].second);
-                // evaluate body
-            }
-            else if (layer.pc == static_cast<int>(lnode->varExprList.size()) + 1) {
-                layer.pc++;
-                stack.emplace_back(layer.env, lnode->expr);
-                // finish letrec
-            }
-            else {
-                int nParams = lnode->varExprList.size();
-                for (int i = 0; i < nParams; i++) {
-                    layer.env->pop_back();
-                }
-                // this layer cannot be optimized by TCO because we need nParams to revert env
-                // no need to update resultLoc: inherited from body evaluation
-                stack.pop_back();
-            }
-        }
-        else if (auto inode = dynamic_cast<const syntax::IfNode*>(layer.expr)) {
-            // evaluate condition
-            if (layer.pc == 0) {
-                layer.pc++;
-                stack.emplace_back(layer.env, inode->cond);
-                // evaluate one branch
-            }
-            else if (layer.pc == 1) {
-                layer.pc++;
-                // inherited condition value
-                if (!std::holds_alternative<runtime::Integer>(heap[resultLoc])) {
-                    _errorStack();
-                    utils::panic("runtime", "wrong cond type", layer.expr->sl);
-                }
-                if (std::get<runtime::Integer>(heap[resultLoc]).value) {
-                    stack.emplace_back(layer.env, inode->branch1);
-                }
-                else {
-                    stack.emplace_back(layer.env, inode->branch2);
-                }
-                // finish if
-            }
-            else {
-                // no need to update resultLoc: inherited
-                stack.pop_back();
-            }
-        }
-        else if (auto snode = dynamic_cast<const syntax::SequenceNode*>(layer.expr)) {
-            // evaluate one-by-one
-            if (layer.pc < static_cast<int>(snode->exprList.size())) {
-                layer.pc++;
-                stack.emplace_back(layer.env, snode->exprList[layer.pc - 1]);
-                // finish
-            }
-            else {
-                // sequence's value is the last expression's value
-                // no need to update resultLoc: inherited
-                stack.pop_back();
-            }
-        }
-        else if (auto inode = dynamic_cast<const syntax::IntrinsicCallNode*>(layer.expr)) {
-            // unified argument recording
-            if (layer.pc > 0 && layer.pc <= static_cast<int>(inode->argList.size())) {
-                layer.local.push_back(resultLoc);
-            }
-            // evaluate arguments
-            if (layer.pc < static_cast<int>(inode->argList.size())) {
-                layer.pc++;
-                stack.emplace_back(layer.env, inode->argList[layer.pc - 1]);
-                // intrinsic call doesn't grow the stack
-            }
-            else {
-                auto value = _callIntrinsic(layer.expr->sl, inode->intrinsic,
-                    layer.local /* intrinsic call is pass by reference */);
-                resultLoc = _moveNew(std::move(value));
-                stack.pop_back();
-            }
-        }
-        else if (auto enode = dynamic_cast<const syntax::ExprCallNode*>(layer.expr)) {
-            // unified argument recording
-            if (layer.pc > 2 && layer.pc <= static_cast<int>(enode->argList.size()) + 2) {
-                layer.local.push_back(resultLoc);
-            }
-            // evaluate the callee
-            if (layer.pc == 0) {
-                layer.pc++;
-                stack.emplace_back(layer.env, enode->expr);
-                // initialization
-            }
-            else if (layer.pc == 1) {
-                layer.pc++;
-                // inherited callee location
-                layer.local.push_back(resultLoc);
-                // evaluate arguments
-            }
-            else if (layer.pc <= static_cast<int>(enode->argList.size()) + 1) {
-                layer.pc++;
-                stack.emplace_back(layer.env, enode->argList[layer.pc - 3]);
-                // call
-            }
-            else if (layer.pc == static_cast<int>(enode->argList.size()) + 2) {
-                layer.pc++;
-                auto exprLoc = layer.local[0];
-                if (!std::holds_alternative<runtime::Closure>(heap[exprLoc])) {
-                    _errorStack();
-                    utils::panic("runtime", "calling a non-callable", layer.expr->sl);
-                }
-                auto& closure = std::get<runtime::Closure>(heap[exprLoc]);
-                // types will be checked inside the closure call
-                if (static_cast<int>(layer.local.size()) - 1 !=
-                    static_cast<int>(closure.fun->varList.size())) {
-                    _errorStack();
-                    utils::panic("runtime", "wrong number of arguments", layer.expr->sl);
-                }
-                int nArgs = static_cast<int>(closure.fun->varList.size());
-                // lexical scope: copy the env from the closure definition place
-                auto newEnv = closure.env;
-                for (int i = 0; i < nArgs; i++) {
-                    // closure call is pass by reference
-                    newEnv.push_back(std::make_pair(closure.fun->varList[i]->name,
-                        layer.local[i + 1]));
-                }
-                // tail call optimization
-                if (enode->tail) {
-                    while (!(stack.back().frame)) {
-                        stack.pop_back();
-                    }
-                    // pop the frame
-                    stack.pop_back();
-                }
-                // evaluation of the closure body
-                stack.emplace_back(
-                    std::make_shared<runtime::Env>(std::move(newEnv)) /* new frame has new env */,
-                    closure.fun->expr, true);
-                // finish
-            }
-            else {
-                // no need to update resultLoc: inherited
-                stack.pop_back();
-            }
-        }
-        else if (auto anode = dynamic_cast<const syntax::AtNode*>(layer.expr)) {
-            // evaluate the expr
-            if (layer.pc == 0) {
-                layer.pc++;
-                stack.emplace_back(layer.env, anode->expr);
-            }
-            else {
-                // inherited resultLoc
-                if (!std::holds_alternative<runtime::Closure>(heap[resultLoc])) {
-                    _errorStack();
-                    utils::panic("runtime", "@ wrong type", layer.expr->sl);
-                }
-                auto varName = anode->var->name;
-                auto loc = runtime::lookup(varName,
-                    std::get<runtime::Closure>(heap[resultLoc]).env);
-                if (!loc.has_value()) {
-                    _errorStack();
-                    utils::panic("runtime", "undefined variable " + varName, layer.expr->sl);
-                }
-                // "access by reference"
-                resultLoc = loc.value();
-                stack.pop_back();
-            }
-        }
-        else {
-            _errorStack();
-            utils::panic("runtime", "unrecognized AST node", layer.expr->sl);
-        }
-        return true;
-    }
-    void execute() {
-        // can choose different initial values here
-        // Note: when the program state is recovered
-        // from de-serialization, the value of gc_threshold
-        // is not preserved and will re-start from this initial value
-        // when calling execute().
-        int gc_threshold = numLiterals + 64;
-        while (step()) {
-            int total = heap.size();
-            if (total > gc_threshold) {
-                int removed = _gc();
-                int live = total - removed;
-                // see also "Optimal heap limits for reducing browser memory use" (OOPSLA 2022)
-                // for the square root solution
-                gc_threshold = live * 2;
-            }
-        }
-    }
-    const runtime::Value& getResult() const {
-        return heap[resultLoc];
-    }
-    const syntax::ExprNode* getExpr() const {
-        return expr;
-    }
-    // TODO: record GC state?
-    std::string serialize() const {
-        // std::string source;
-        std::string serializedSource =
-            "{ src " + std::to_string(source.size()) + " ^" + source + " }";
-        // syntax::ExprNode *expr;
-        // (skipped, because source is more accurate)
-        std::string serializedState;
-        // std::vector<Layer> stack;
-        serializedState += "{ stk";
-        for (auto& layer : stack) {
-            serializedState += " ";
-            serializedState += serialization::join(serialization::layerToSentence(layer, expr));
-        }
-        serializedState += " }";
-        // std::vector<Value> heap;
-        serializedState += " { hp";
-        for (auto& value : heap) {
-            serializedState += " ";
-            serializedState += serialization::join(serialization::valueToSentence(value, expr));
-        }
-        serializedState += " }";
-        // int numLiterals;
-        serializedState += " { nLit ";
-        serializedState += std::to_string(numLiterals);
-        serializedState += " }";
-        // Location resultLoc;
-        serializedState += " { rLoc ";
-        serializedState += std::to_string(resultLoc);
-        serializedState += " }";
-        auto ret = "|" + serializedSource + " " + serializedState + "|";
-        return ret;
-    }
-private:
     void _populateStaticAnalysisResults(bool doPreAlloc = true) {
         std::function<void(syntax::ExprNode*)> checkDuplicate =
             [](syntax::ExprNode* e) -> void {
@@ -2289,6 +1804,218 @@ private:
             expr->traverse(syntax::TraversalMode::TOP_DOWN, findPreAllocate);
         }
     }
+public:
+    State(std::string origin) {
+        if (origin.size() == 0) {
+            utils::panic("state constructor", "empty origin string");
+        }
+        else if (origin[0] != '|') {  // origin is source code
+            // (1) copy source code
+            source = std::move(origin);
+            // (2) AST construction (parsing and static analysis) (TODO: exceptions?)
+            expr = syntax::parse(syntax::lex(source));
+            _populateStaticAnalysisResults();
+            // (3) stack initialization
+            // the main frame (which cannot be removed by TCO because it's marked as not tail)
+            stack.push_back(runtime::Layer(runtime::Env(), nullptr, true));
+            // the first expression
+            stack.push_back(runtime::Layer(runtime::Env(), expr));
+            // (4) heap initialization
+            // skipped (_populateStaticAnalysisResults may have created some heap entries)
+            // (5) literal boundary initialization
+            numLiterals = heap.size();
+            // (6) result location initialization (no result yet)
+            resultLoc = -1;
+        }
+        else {  // origin is serialized state
+            int originLen = origin.size();
+            std::string sourceLenStr;
+            for (int i = std::string("|{ src ").size(); i < originLen; i++) {
+                if (std::isdigit(origin[i])) {
+                    sourceLenStr += origin[i];
+                }
+                else {
+                    break;
+                }
+            }
+            // (1) copy source code
+            int sourceStart = 0;  // starting from 0 is a conservative choice
+            for (int i = 0; i < originLen; i++) {
+                if (origin[i] == '^') {
+                    sourceStart = i + 1;
+                    break;
+                }
+            }
+            if (sourceStart == 0) {
+                utils::panic("serialization", "didn't find source code beginner");
+            }
+            source = origin.substr(sourceStart, std::stoi(sourceLenStr));
+            // (2) AST construction (parsing and static analysis) (TODO: exceptions?)
+            expr = syntax::parse(syntax::lex(source));
+            // (3) stack initialization
+            int stackStart = sourceStart + std::stoi(sourceLenStr) + std::string(" } ").size();
+            if (stackStart >= static_cast<int>(origin.size())) {
+                utils::panic("serialization", "didn't find stack beginner");
+            }
+            // split the rest of "origin" into a "Sentence"
+            serialization::Sentence sentence;
+            {
+                std::istringstream sin(origin.substr(stackStart, origin.size()));
+                std::string word;
+                while (sin >> word) {
+                    sentence.push_back(word);
+                    // special treatment of string values
+                    if (word == "sval" && sentence.size() > 1 && *(sentence.rbegin() + 1) == "(") {
+                        sin >> word;
+                        sentence.push_back(word);
+                        int len = std::stoi(word);
+                        while (true) {
+                            if (sin.get() == '"') {
+                                break;
+                            }
+                            if (sin.eof()) {
+                                utils::panic("serialization", "didn't find start of str val");
+                            }
+                        }
+                        word = "\"";
+                        for (int i = 0; i < len - 1; i++) {
+                            word.push_back(sin.get());
+                            if (sin.eof()) {
+                                utils::panic("serialization", "incomplete string");
+                            }
+                        }
+                        if (word.back() != '"') {
+                            utils::panic("serialization", "invalid string terminator");
+                        }
+                        sentence.push_back(word);
+                    }
+                }
+            }
+            auto stackSentence = serialization::takeTo(sentence, "}");
+            if (stackSentence.size() < 3) {  // { stk }
+                utils::panic("serialization", "invalid stack");
+            }
+            stackSentence.pop_front();  // "{"
+            stackSentence.pop_front();  // "stk"
+            while (stackSentence.size() > 0 && stackSentence.front() == "<") {
+                auto layerSentence = serialization::takeTo(stackSentence, ">");
+                stack.push_back(serialization::sentenceToLayer(layerSentence, expr));
+            }
+            if (stackSentence.empty() || stackSentence.front() != "}") {
+                utils::panic("serialization", "invalid stack terminator");
+            }
+            stackSentence.pop_front();  // "}"; this isn't really necessary here
+            // (4) heap initialization
+            auto heapSentence = serialization::takeTo(sentence, "}");
+            if (heapSentence.size() < 3) {  // { hp }
+                utils::panic("serialization", "invalid heap");
+            }
+            heapSentence.pop_front();  // "{"
+            heapSentence.pop_front();  // "hp"
+            while (heapSentence.size() > 0 && heapSentence.front() == "(") {
+                auto valueSentence = serialization::takeTo(heapSentence, ")");
+                heap.push_back(serialization::sentenceToValue(
+                    valueSentence, expr
+                ));
+            }
+            if (heapSentence.empty() || heapSentence.front() != "}") {
+                utils::panic("serialization", "invalid heap terminator");
+            }
+            heapSentence.pop_front();  // "}"; this isn't really necessary here
+            // (5) literal boundary initialization
+            if (sentence.size() < 4) {
+                utils::panic("serialization", "incomplete literal boundary");
+            }
+            sentence.pop_front();  // "{"
+            sentence.pop_front();  // "nLit"
+            numLiterals = std::stoi(sentence.front());
+            sentence.pop_front();  // <nLit>
+            sentence.pop_front();  // "}"
+            // (6) result location initialization
+            if (sentence.size() < 4) {
+                utils::panic("serialization", "incomplete result location");
+            }
+            sentence.pop_front();  // "{"
+            sentence.pop_front();  // "rLoc"
+            resultLoc = std::stoi(sentence.front());
+            sentence.pop_front();  // <rLoc>
+            sentence.pop_front();  // "}"; this isn't really necessary here
+            // _populateStaticAnalysisResults don't do preAlloc
+            // because heap will be reconstructed
+            // instead, do findPreAlloc to find out previously allocated locations
+            // this has to come after (5) literal boundary initialization
+            // because it needs numLiterals
+            _populateStaticAnalysisResults(false);
+        }
+    }
+private:
+    void _migrateAST(const State& state1, State& state2) {
+        for (auto& layer : state2.stack) {
+            if (layer.expr != nullptr) {
+                layer.expr = serialization::migrateASTNode(state1.expr, state2.expr, layer.expr);
+            }
+        }
+        for (auto& value : state2.heap) {
+            if (std::holds_alternative<runtime::Closure>(value)) {
+                auto& closure = std::get<runtime::Closure>(value);
+                closure.fun = dynamic_cast<const syntax::LambdaNode*>(
+                    serialization::migrateASTNode(state1.expr, state2.expr,
+                        closure.fun)
+                );
+            }
+        }
+    }
+public:
+    State(const State& state) :
+        source(state.source),
+        expr(state.expr->clone()),
+        stack(state.stack),
+        heap(state.heap),
+        numLiterals(state.numLiterals),
+        resultLoc(state.resultLoc) {
+        _migrateAST(state, *this);
+    }
+    State& operator=(const State& state) {
+        if (this != &state) {
+            source = state.source;
+            delete expr;
+            expr = state.expr->clone();
+            stack = state.stack;
+            heap = state.heap;
+            numLiterals = state.numLiterals;
+            resultLoc = state.resultLoc;
+            _migrateAST(state, *this);
+        }
+        return *this;
+    }
+    State(State&& state) :
+        source(std::move(state.source)),
+        expr(state.expr),
+        stack(std::move(state.stack)),
+        heap(std::move(state.heap)),
+        numLiterals(state.numLiterals),
+        resultLoc(state.resultLoc) {
+        state.expr = nullptr;
+    }
+    State& operator=(State&& state) {
+        if (this != &state) {
+            source = std::move(state.source);
+            delete expr;
+            expr = state.expr;
+            state.expr = nullptr;
+            stack = std::move(state.stack);
+            heap = std::move(state.heap);
+            numLiterals = state.numLiterals;
+            resultLoc = state.resultLoc;
+        }
+        return *this;
+    }
+    ~State() {
+        if (expr != nullptr) {
+            delete expr;
+        }
+    }
+private:
     template <typename... Alt>
         requires (true && ... &&
             (std::same_as<Alt, runtime::Value> || utils::isAlternativeOf<Alt, runtime::Value>))
@@ -2578,7 +2305,7 @@ private:
         for (const auto& layer : stack) {
             // only frames "own" the environments
             if (layer.frame) {
-                for (const auto& [_, loc] : (*(layer.env))) {
+                for (const auto& [_, loc] : (layer.env)) {
                     traverseLocation(loc);
                 }
             }
@@ -2619,7 +2346,7 @@ private:
         for (auto& layer : stack) {
             // only frames "own" the environments
             if (layer.frame) {
-                for (auto& [_, loc] : (*(layer.env))) {
+                for (auto& [_, loc] : (layer.env)) {
                     reloc(loc);
                 }
             }
@@ -2667,7 +2394,316 @@ private:
             std::cerr << "calling function body at " << sl.toString() << "\n";
         }
     }
-
+    runtime::Env& _getEnv() {
+        for (auto p = stack.rbegin(); p != stack.rend(); p++) {
+            if (p->frame) {
+                return p->env;
+            }
+        }
+        // should be unreachable
+        return stack.back().env;
+    }
+public:
+    // returns true iff the step is completed without reaching the end of evaluation
+    bool step() {
+        // be careful! this reference may be invalidated after modifying the stack
+        // so always keep stack change as the last operation(s)
+        auto& layer = stack.back();
+        // main frame; end of evaluation
+        if (layer.expr == nullptr) {
+            return false;
+        }
+        // evaluations for every case
+        if (auto inode = dynamic_cast<const syntax::IntegerNode*>(layer.expr)) {
+            resultLoc = inode->loc;
+            stack.pop_back();
+        }
+        else if (auto snode = dynamic_cast<const syntax::StringNode*>(layer.expr)) {
+            resultLoc = snode->loc;
+            stack.pop_back();
+        }
+        else if (auto vnode = dynamic_cast<const syntax::VariableNode*>(layer.expr)) {
+            auto varName = vnode->name;
+            auto loc = runtime::lookup(varName, _getEnv());
+            if (!loc.has_value()) {
+                _errorStack();
+                utils::panic("runtime", "undefined variable " + varName, layer.expr->sl);
+            }
+            resultLoc = loc.value();
+            stack.pop_back();
+        }
+        else if (auto lnode = dynamic_cast<const syntax::LambdaNode*>(layer.expr)) {
+            // copy the statically used part of the env into the closure
+            runtime::Env savedEnv;
+            // copy
+            auto usedVars = lnode->freeVars;
+            auto& env = _getEnv();
+            for (auto ptr = env.rbegin(); ptr != env.rend(); ptr++) {
+                if (usedVars.empty()) {
+                    break;
+                }
+                if (usedVars.contains(ptr->first)) {
+                    savedEnv.push_back(*ptr);
+                    usedVars.erase(ptr->first);
+                }
+            }
+            std::reverse(savedEnv.begin(), savedEnv.end());
+            resultLoc = _new<runtime::Closure>(savedEnv, lnode);
+            stack.pop_back();
+        }
+        else if (auto lnode = dynamic_cast<const syntax::LetrecNode*>(layer.expr)) {
+            // unified argument recording
+            if (layer.pc > 1 && layer.pc <= static_cast<int>(lnode->varExprList.size()) + 1) {
+                auto varName = lnode->varExprList[layer.pc - 2].first->name;
+                auto loc = runtime::lookup(varName, _getEnv());
+                // this shouldn't happen since those variables are newly introduced by letrec
+                if (!loc.has_value()) {
+                    _errorStack();
+                    utils::panic("runtime", "undefined variable " + varName, layer.expr->sl);
+                }
+                // copy (inherited resultLoc)
+                heap[loc.value()] = heap[resultLoc];
+            }
+            // create all new locations
+            if (layer.pc == 0) {
+                layer.pc++;
+                auto& env = _getEnv();
+                for (const auto& [var, _] : lnode->varExprList) {
+                    env.push_back(std::make_pair(var->name, _new<runtime::Void>()));
+                }
+            }
+            // evaluate bindings
+            else if (layer.pc <= static_cast<int>(lnode->varExprList.size())) {
+                layer.pc++;
+                // note: growing the stack might invalidate the reference "layer"
+                //       but this is fine since next time "layer" will be re-bound
+                stack.emplace_back(runtime::Env(), lnode->varExprList[layer.pc - 2].second);
+            }
+            // evaluate body
+            else if (layer.pc == static_cast<int>(lnode->varExprList.size()) + 1) {
+                layer.pc++;
+                stack.emplace_back(runtime::Env(), lnode->expr);
+            }
+            // finish letrec
+            else {
+                int nParams = lnode->varExprList.size();
+                auto& env = _getEnv();
+                for (int i = 0; i < nParams; i++) {
+                    env.pop_back();
+                }
+                // this layer cannot be optimized by TCO because we need nParams to revert env
+                // no need to update resultLoc: inherited from body evaluation
+                stack.pop_back();
+            }
+        }
+        else if (auto inode = dynamic_cast<const syntax::IfNode*>(layer.expr)) {
+            // evaluate condition
+            if (layer.pc == 0) {
+                layer.pc++;
+                stack.emplace_back(runtime::Env(), inode->cond);
+            }
+            // evaluate one branch
+            else if (layer.pc == 1) {
+                layer.pc++;
+                // inherited condition value
+                if (!std::holds_alternative<runtime::Integer>(heap[resultLoc])) {
+                    _errorStack();
+                    utils::panic("runtime", "wrong cond type", layer.expr->sl);
+                }
+                if (std::get<runtime::Integer>(heap[resultLoc]).value) {
+                    stack.emplace_back(runtime::Env(), inode->branch1);
+                }
+                else {
+                    stack.emplace_back(runtime::Env(), inode->branch2);
+                }
+            }
+            // finish if
+            else {
+                // no need to update resultLoc: inherited
+                stack.pop_back();
+            }
+        }
+        else if (auto snode = dynamic_cast<const syntax::SequenceNode*>(layer.expr)) {
+            // evaluate one-by-one
+            if (layer.pc < static_cast<int>(snode->exprList.size())) {
+                layer.pc++;
+                stack.emplace_back(runtime::Env(), snode->exprList[layer.pc - 1]);
+            }
+            // finish
+            else {
+                // sequence's value is the last expression's value
+                // no need to update resultLoc: inherited
+                stack.pop_back();
+            }
+        }
+        else if (auto inode = dynamic_cast<const syntax::IntrinsicCallNode*>(layer.expr)) {
+            // unified argument recording
+            if (layer.pc > 0 && layer.pc <= static_cast<int>(inode->argList.size())) {
+                layer.local.push_back(resultLoc);
+            }
+            // evaluate arguments
+            if (layer.pc < static_cast<int>(inode->argList.size())) {
+                layer.pc++;
+                stack.emplace_back(runtime::Env(), inode->argList[layer.pc - 1]);
+            }
+            // intrinsic call doesn't grow the stack
+            else {
+                auto value = _callIntrinsic(layer.expr->sl, inode->intrinsic,
+                    layer.local /* intrinsic call is pass by reference */);
+                resultLoc = _moveNew(std::move(value));
+                stack.pop_back();
+            }
+        }
+        else if (auto enode = dynamic_cast<const syntax::ExprCallNode*>(layer.expr)) {
+            // unified argument recording
+            if (layer.pc > 2 && layer.pc <= static_cast<int>(enode->argList.size()) + 2) {
+                layer.local.push_back(resultLoc);
+            }
+            // evaluate the callee
+            if (layer.pc == 0) {
+                layer.pc++;
+                stack.emplace_back(runtime::Env(), enode->expr);
+            }
+            // initialization
+            else if (layer.pc == 1) {
+                layer.pc++;
+                // inherited callee location
+                layer.local.push_back(resultLoc);
+            }
+            // evaluate arguments
+            else if (layer.pc <= static_cast<int>(enode->argList.size()) + 1) {
+                layer.pc++;
+                stack.emplace_back(runtime::Env(), enode->argList[layer.pc - 3]);
+            }
+            // call
+            else if (layer.pc == static_cast<int>(enode->argList.size()) + 2) {
+                layer.pc++;
+                auto exprLoc = layer.local[0];
+                if (!std::holds_alternative<runtime::Closure>(heap[exprLoc])) {
+                    _errorStack();
+                    utils::panic("runtime", "calling a non-callable", layer.expr->sl);
+                }
+                auto& closure = std::get<runtime::Closure>(heap[exprLoc]);
+                // types will be checked inside the closure call
+                if (static_cast<int>(layer.local.size()) - 1 !=
+                    static_cast<int>(closure.fun->varList.size())) {
+                    _errorStack();
+                    utils::panic("runtime", "wrong number of arguments", layer.expr->sl);
+                }
+                int nArgs = static_cast<int>(closure.fun->varList.size());
+                // lexical scope: copy the env from the closure definition place
+                auto newEnv = closure.env;
+                for (int i = 0; i < nArgs; i++) {
+                    // closure call is pass by reference
+                    newEnv.push_back(std::make_pair(closure.fun->varList[i]->name,
+                        layer.local[i + 1]));
+                }
+                // tail call optimization
+                if (enode->tail) {
+                    while (!(stack.back().frame)) {
+                        stack.pop_back();
+                    }
+                    // pop the frame
+                    stack.pop_back();
+                }
+                // evaluation of the closure body
+                stack.emplace_back(std::move(newEnv) /* new frame has new env */,
+                    closure.fun->expr, true);
+            }
+            // finish
+            else {
+                // no need to update resultLoc: inherited
+                stack.pop_back();
+            }
+        }
+        else if (auto anode = dynamic_cast<const syntax::AtNode*>(layer.expr)) {
+            // evaluate the expr
+            if (layer.pc == 0) {
+                layer.pc++;
+                stack.emplace_back(runtime::Env(), anode->expr);
+            }
+            else {
+                // inherited resultLoc
+                if (!std::holds_alternative<runtime::Closure>(heap[resultLoc])) {
+                    _errorStack();
+                    utils::panic("runtime", "@ wrong type", layer.expr->sl);
+                }
+                auto varName = anode->var->name;
+                auto loc = runtime::lookup(varName,
+                    std::get<runtime::Closure>(heap[resultLoc]).env);
+                if (!loc.has_value()) {
+                    _errorStack();
+                    utils::panic("runtime", "undefined variable " + varName, layer.expr->sl);
+                }
+                // "access by reference"
+                resultLoc = loc.value();
+                stack.pop_back();
+            }
+        }
+        else {
+            _errorStack();
+            utils::panic("runtime", "unrecognized AST node", layer.expr->sl);
+        }
+        return true;
+    }
+    void execute() {
+        // can choose different initial values here
+        // Note: when the program state is recovered
+        // from de-serialization, the value of gc_threshold
+        // is not preserved and will re-start from this initial value
+        // when calling execute().
+        int gc_threshold = numLiterals + 64;
+        while (step()) {
+            int total = heap.size();
+            if (total > gc_threshold) {
+                int removed = _gc();
+                int live = total - removed;
+                // see also "Optimal heap limits for reducing browser memory use" (OOPSLA 2022)
+                // for the square root solution
+                gc_threshold = live * 2;
+            }
+        }
+    }
+    const runtime::Value& getResult() const {
+        return heap[resultLoc];
+    }
+    const syntax::ExprNode* getExpr() const {
+        return expr;
+    }
+    // TODO: record GC state?
+    std::string serialize() const {
+        // std::string source;
+        std::string serializedSource =
+            "{ src " + std::to_string(source.size()) + " ^" + source + " }";
+        // syntax::ExprNode *expr;
+        // (skipped, because source is more accurate)
+        std::string serializedState;
+        // std::vector<Layer> stack;
+        serializedState += "{ stk";
+        for (auto& layer : stack) {
+            serializedState += " ";
+            serializedState += serialization::join(serialization::layerToSentence(layer, expr));
+        }
+        serializedState += " }";
+        // std::vector<Value> heap;
+        serializedState += " { hp";
+        for (auto& value : heap) {
+            serializedState += " ";
+            serializedState += serialization::join(serialization::valueToSentence(value, expr));
+        }
+        serializedState += " }";
+        // int numLiterals;
+        serializedState += " { nLit ";
+        serializedState += std::to_string(numLiterals);
+        serializedState += " }";
+        // Location resultLoc;
+        serializedState += " { rLoc ";
+        serializedState += std::to_string(resultLoc);
+        serializedState += " }";
+        auto ret = "|" + serializedSource + " " + serializedState + "|";
+        return ret;
+    }
+private:
     // states
     std::string source;
     syntax::ExprNode* expr;
@@ -2703,12 +2739,31 @@ int main(int argc, char** argv) {
         std::exit(EXIT_FAILURE);
     }
     try {
-        std::string source = readSource(argv[1]);
-        State state(std::move(source));
+#ifndef DEBUG
+        State state(readSource(argv[1]));
         state.execute();
         std::cout << "<end-of-stdout>\n"
             << serialization::join(
-                   serialization::valueToSentence(state.getResult(), state.getExpr())) << std::endl;
+                serialization::valueToSentence(state.getResult(), state.getExpr())) << std::endl;
+#else
+        // test the copy / move assignment operators for State
+        std::string source = readSource(argv[1]);
+        State state1(source);
+        {
+            State state2(source);
+            {
+                State state3(source);
+                state2 = state3;
+                // destruct state3
+            }
+            state1 = std::move(state2);
+            // destruct state2
+        }
+        state1.execute();
+        std::cout << "<end-of-stdout>\n"
+            << serialization::join(
+                serialization::valueToSentence(state1.getResult(), state1.getExpr())) << std::endl;
+#endif
     }
     catch (const std::runtime_error& e) {
         std::cerr << e.what() << std::endl;
