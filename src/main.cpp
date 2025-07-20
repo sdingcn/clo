@@ -46,7 +46,7 @@ namespace utils {
     constexpr bool isAlternativeOf = isAlternativeOfHelper<Type, Variant>::value;
 
     struct SourceLocation {
-        SourceLocation(int l = 1, int c = 1) : line(l), column(c) {}
+        SourceLocation(int l = 0, int c = 0) : line(l), column(c) {}
 
         std::string toString() const {
             if (line <= 0 || column <= 0) {
@@ -75,7 +75,7 @@ namespace utils {
     void panic(
         const std::string& type,
         const std::string& msg,
-        const SourceLocation& sl = SourceLocation(0, 0)
+        const SourceLocation& sl = SourceLocation()
     ) {
         if (sl.line <= 0 || sl.column <= 0) {
             throw std::runtime_error("[" + type + " error] " + msg);
@@ -314,10 +314,16 @@ namespace syntax {
     CLASS(const CLASS &) = delete; \
     CLASS &operator=(const CLASS &) = delete
 
+#define BASIC_INFO_PARMDECL \
+    utils::SourceLocation s = utils::SourceLocation(), \
+    std::unordered_set<std::string> f = std::unordered_set<std::string>(), \
+    bool t = false
+
     struct ExprNode {
         DELETE_COPY(ExprNode);
         virtual ~ExprNode() {}
-        ExprNode(utils::SourceLocation s) : sl(s) {}
+        ExprNode(BASIC_INFO_PARMDECL)
+            : sl(s), freeVars(f), tail(t) {}
 
         virtual ExprNode* clone() const = 0;
         virtual void traverse(
@@ -342,13 +348,12 @@ namespace syntax {
     struct IntegerNode : public ExprNode {
         DELETE_COPY(IntegerNode);
         virtual ~IntegerNode() {}
-        IntegerNode(utils::SourceLocation s, std::string v) : ExprNode(s), val(std::move(v)) {}
+        IntegerNode(std::string v, BASIC_INFO_PARMDECL)
+            : ExprNode(s, f, t), val(std::move(v)) {}
 
         // covariant return type for override
         virtual IntegerNode* clone() const override {
-            auto inode = new IntegerNode(sl, val);
-            inode->freeVars = freeVars;
-            inode->tail = tail;
+            auto inode = new IntegerNode(val, sl, freeVars, tail);
             inode->loc = loc;
             return inode;
         }
@@ -375,13 +380,12 @@ namespace syntax {
     struct StringNode : public ExprNode {
         DELETE_COPY(StringNode);
         virtual ~StringNode() {}
-        StringNode(utils::SourceLocation s, std::string v) : ExprNode(s), val(std::move(v)) {}
+        StringNode(std::string v, BASIC_INFO_PARMDECL)
+            : ExprNode(s, f, t), val(std::move(v)) {}
 
         // covariant return type
         virtual StringNode* clone() const override {
-            auto snode = new StringNode(sl, val);
-            snode->freeVars = freeVars;
-            snode->tail = tail;
+            auto snode = new StringNode(val, sl, freeVars, tail);
             snode->loc = loc;
             return snode;
         }
@@ -407,12 +411,11 @@ namespace syntax {
     struct VariableNode : public ExprNode {
         DELETE_COPY(VariableNode);
         virtual ~VariableNode() {}
-        VariableNode(utils::SourceLocation s, std::string n) : ExprNode(s), name(std::move(n)) {}
+        VariableNode(std::string n, BASIC_INFO_PARMDECL)
+            : ExprNode(s, f, t), name(std::move(n)) {}
 
         virtual VariableNode* clone() const override {
-            auto vnode = new VariableNode(sl, name);
-            vnode->freeVars = freeVars;
-            vnode->tail = tail;
+            auto vnode = new VariableNode(name, sl, freeVars, tail);
             return vnode;
         }
         virtual void traverse(
@@ -441,9 +444,8 @@ namespace syntax {
             }
             delete expr;
         }
-        LambdaNode(utils::SourceLocation s, std::vector<VariableNode*> v, ExprNode* e) :
-            ExprNode(s), varList(std::move(v)), expr(e) {
-        }
+        LambdaNode(std::vector<VariableNode*> v, ExprNode* e, BASIC_INFO_PARMDECL) :
+            ExprNode(s, f, t), varList(std::move(v)), expr(e) {}
 
         virtual LambdaNode* clone() const override {
             std::vector<VariableNode*> newVarList;
@@ -451,9 +453,7 @@ namespace syntax {
                 newVarList.push_back(v->clone());
             }
             ExprNode* newExpr = expr->clone();
-            auto lnode = new LambdaNode(sl, std::move(newVarList), newExpr);
-            lnode->freeVars = freeVars;
-            lnode->tail = tail;
+            auto lnode = new LambdaNode(std::move(newVarList), newExpr, sl, freeVars, tail);
             return lnode;
         }
         virtual void traverse(
@@ -517,10 +517,9 @@ namespace syntax {
             delete expr;
         }
         LetrecNode(
-            utils::SourceLocation s,
-            std::vector<std::pair<VariableNode*, ExprNode*>> v, ExprNode* e) :
-            ExprNode(s), varExprList(std::move(v)), expr(e) {
-        }
+            std::vector<std::pair<VariableNode*, ExprNode*>> v, ExprNode* e,
+            BASIC_INFO_PARMDECL) :
+            ExprNode(s, f, t), varExprList(std::move(v)), expr(e) {}
 
         virtual LetrecNode* clone() const override {
             std::vector<std::pair<VariableNode*, ExprNode*>> newVarExprList;
@@ -529,9 +528,7 @@ namespace syntax {
                 newVarExprList.push_back(std::make_pair(ve.first->clone(), ve.second->clone()));
             }
             ExprNode* newExpr = expr->clone();
-            auto lnode = new LetrecNode(sl, std::move(newVarExprList), newExpr);
-            lnode->freeVars = freeVars;
-            lnode->tail = tail;
+            auto lnode = new LetrecNode(std::move(newVarExprList), newExpr, sl, freeVars, tail);
             return lnode;
         }
         virtual void traverse(
@@ -600,15 +597,13 @@ namespace syntax {
             delete branch1;
             delete branch2;
         }
-        IfNode(utils::SourceLocation s, ExprNode* c, ExprNode* b1, ExprNode* b2) :
-            ExprNode(s), cond(c), branch1(b1), branch2(b2) {
-        }
+        IfNode(ExprNode* c, ExprNode* b1, ExprNode* b2, BASIC_INFO_PARMDECL) :
+            ExprNode(s, f, t), cond(c), branch1(b1), branch2(b2) {}
 
         virtual IfNode* clone() const override {
             // the evaluation order of the three clones are irrelevant
-            auto inode = new IfNode(sl, cond->clone(), branch1->clone(), branch2->clone());
-            inode->freeVars = freeVars;
-            inode->tail = tail;
+            auto inode = new IfNode(cond->clone(), branch1->clone(), branch2->clone(),
+                sl, freeVars, tail);
             return inode;
         }
         virtual void traverse(
@@ -659,18 +654,15 @@ namespace syntax {
                 delete e;
             }
         }
-        SequenceNode(utils::SourceLocation s, std::vector<ExprNode*> e) :
-            ExprNode(s), exprList(std::move(e)) {
-        }
+        SequenceNode(std::vector<ExprNode*> e, BASIC_INFO_PARMDECL) :
+            ExprNode(s, f, t), exprList(std::move(e)) {}
 
         virtual SequenceNode* clone() const override {
             std::vector<ExprNode*> newExprList;
             for (auto e : exprList) {
                 newExprList.push_back(e->clone());
             }
-            auto snode = new SequenceNode(sl, std::move(newExprList));
-            snode->freeVars = freeVars;
-            snode->tail = tail;
+            auto snode = new SequenceNode(std::move(newExprList), sl, freeVars, tail);
             return snode;
         }
         virtual void traverse(
@@ -728,18 +720,16 @@ namespace syntax {
                 delete a;
             }
         }
-        IntrinsicCallNode(utils::SourceLocation s, std::string i, std::vector<ExprNode*> a) :
-            ExprNode(s), intrinsic(std::move(i)), argList(std::move(a)) {
-        }
+        IntrinsicCallNode(std::string i, std::vector<ExprNode*> a, BASIC_INFO_PARMDECL):
+            ExprNode(s, f, t), intrinsic(std::move(i)), argList(std::move(a)) {}
 
         virtual IntrinsicCallNode* clone() const override {
             std::vector<ExprNode*> newArgList;
             for (auto a : argList) {
                 newArgList.push_back(a->clone());
             }
-            auto inode = new IntrinsicCallNode(sl, intrinsic, std::move(newArgList));
-            inode->freeVars = freeVars;
-            inode->tail = tail;
+            auto inode = new IntrinsicCallNode(
+                intrinsic, std::move(newArgList), sl, freeVars, tail);
             return inode;
         }
         virtual void traverse(
@@ -794,9 +784,8 @@ namespace syntax {
                 delete a;
             }
         }
-        ExprCallNode(utils::SourceLocation s, ExprNode* e, std::vector<ExprNode*> a) :
-            ExprNode(s), expr(e), argList(std::move(a)) {
-        }
+        ExprCallNode(ExprNode* e, std::vector<ExprNode*> a, BASIC_INFO_PARMDECL) :
+            ExprNode(s, f, t), expr(e), argList(std::move(a)) {}
 
         virtual ExprCallNode* clone() const override {
             ExprNode* newExpr = expr->clone();
@@ -804,9 +793,7 @@ namespace syntax {
             for (auto a : argList) {
                 newArgList.push_back(a->clone());
             }
-            auto enode = new ExprCallNode(sl, newExpr, std::move(newArgList));
-            enode->freeVars = freeVars;
-            enode->tail = tail;
+            auto enode = new ExprCallNode(newExpr, std::move(newArgList), sl, freeVars, tail);
             return enode;
         }
         virtual void traverse(
@@ -863,14 +850,12 @@ namespace syntax {
             delete var;
             delete expr;
         }
-        AtNode(utils::SourceLocation s, VariableNode* v, ExprNode* e) :
-            ExprNode(s), var(v), expr(e) {}
+        AtNode(VariableNode* v, ExprNode* e, BASIC_INFO_PARMDECL) :
+            ExprNode(s, f, t), var(v), expr(e) {}
 
         virtual AtNode* clone() const override {
             // the evaluation order of the two clones are irrelevant
-            auto anode = new AtNode(sl, var->clone(), expr->clone());
-            anode->freeVars = freeVars;
-            anode->tail = tail;
+            auto anode = new AtNode(var->clone(), expr->clone(), sl, freeVars, tail);
             return anode;
         }
         virtual void traverse(
@@ -907,6 +892,7 @@ namespace syntax {
         }
     };
 
+#undef BASIC_INFO_PARMDECL
 #undef DELETE_COPY
 
     ExprNode* parse(std::deque<Token> tokens) {
@@ -954,15 +940,15 @@ namespace syntax {
 
         parseInteger = [&]() -> IntegerNode* {
             auto token = consume(isIntegerToken);
-            return new IntegerNode(token.sl, token.text);
+            return new IntegerNode(token.text, token.sl);
         };
         parseString = [&]() -> StringNode* {  // don't unquote here: AST keeps raw tokens
             auto token = consume(isStringToken);
-            return new StringNode(token.sl, token.text);
+            return new StringNode(token.text, token.sl);
         };
         parseVariable = [&]() -> VariableNode* {
             auto token = consume(isVariableToken);
-            return new VariableNode(token.sl, std::move(token.text));
+            return new VariableNode(std::move(token.text), token.sl);
         };
         parseLambda = [&]() -> LambdaNode* {
             auto start = consume(isTheToken("lambda"));
@@ -973,7 +959,7 @@ namespace syntax {
             }
             consume(isTheToken(")"));
             auto expr = parseExpr();
-            return new LambdaNode(start.sl, std::move(varList), expr);
+            return new LambdaNode(std::move(varList), expr, start.sl);
         };
         parseLetrec = [&]() -> LetrecNode* {
             auto start = consume(isTheToken("letrec"));
@@ -987,14 +973,14 @@ namespace syntax {
             }
             consume(isTheToken(")"));
             auto expr = parseExpr();
-            return new LetrecNode(start.sl, std::move(varExprList), expr);
+            return new LetrecNode(std::move(varExprList), expr, start.sl);
         };
         parseIf = [&]() -> IfNode* {
             auto start = consume(isTheToken("if"));
             auto cond = parseExpr();
             auto branch1 = parseExpr();
             auto branch2 = parseExpr();
-            return new IfNode(start.sl, cond, branch1, branch2);
+            return new IfNode(cond, branch1, branch2, start.sl);
         };
         parseSequence = [&]() -> SequenceNode* {
             auto start = consume(isTheToken("{"));
@@ -1006,7 +992,7 @@ namespace syntax {
                 utils::panic("parser", "zero-length sequence", start.sl);
             }
             consume(isTheToken("}"));
-            return new SequenceNode(start.sl, std::move(exprList));
+            return new SequenceNode(std::move(exprList), start.sl);
         };
         parseIntrinsicCall = [&]() -> IntrinsicCallNode* {
             auto start = consume(isTheToken("("));
@@ -1016,7 +1002,7 @@ namespace syntax {
                 argList.push_back(parseExpr());
             }
             consume(isTheToken(")"));
-            return new IntrinsicCallNode(start.sl, std::move(intrinsic.text), std::move(argList));
+            return new IntrinsicCallNode(std::move(intrinsic.text), std::move(argList), start.sl);
         };
         parseExprCall = [&]() -> ExprCallNode* {
             auto start = consume(isTheToken("("));
@@ -1026,13 +1012,13 @@ namespace syntax {
                 argList.push_back(parseExpr());
             }
             consume(isTheToken(")"));
-            return new ExprCallNode(start.sl, expr, std::move(argList));
+            return new ExprCallNode(expr, std::move(argList), start.sl);
         };
         parseAt = [&]() -> AtNode* {
             auto start = consume(isTheToken("@"));
             auto var = parseVariable();
             auto expr = parseExpr();
-            return new AtNode(start.sl, var, expr);
+            return new AtNode(var, expr, start.sl);
         };
         parseExpr = [&]() -> ExprNode* {
             if (!tokens.size()) {
@@ -1146,8 +1132,7 @@ namespace runtime {
             bool f = false,
             int p = 0,
             std::vector<syntax::Location> l = std::vector<syntax::Location>()) :
-            frame(f), env(std::move(e)), expr(x), pc(p), local(std::move(l)) {
-        }
+            frame(f), env(std::move(e)), expr(x), pc(p), local(std::move(l)) {}
 
         // whether this is a frame
         bool frame;
