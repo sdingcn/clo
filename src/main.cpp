@@ -54,7 +54,7 @@ namespace utils {
             }
             return "(SourceLocation " + std::to_string(line) + " " + std::to_string(column) + ")";
         }
-        void revert() {
+        void reset() {
             line = 1;
             column = 1;
         }
@@ -161,13 +161,14 @@ namespace syntax {
                 "qwertyuiopasdfghjklzxcvbnmQWERTYUIOPASDFGHJKLZXCVBNM"
                 "[]\\;',./{}|:\"<>? \t\n";
             std::unordered_set<char> charset(charstr.begin(), charstr.end());
+            sl.reset();
             for (char c : source) {
                 if (!charset.contains(c)) {
                     utils::panic("lexer", "unsupported character", sl);
                 }
                 sl.update(c);
             }
-            sl.revert();
+            sl.reset();
             std::reverse(source.begin(), source.end());
         }
 
@@ -200,6 +201,7 @@ namespace syntax {
     };
 
     std::deque<Token> lex(std::string source) {
+        // the constructor checks the character set
         SourceStream ss(std::move(source));
 
         std::function<std::optional<Token>()> nextToken =
@@ -314,7 +316,7 @@ namespace syntax {
     CLASS(const CLASS &) = delete; \
     CLASS &operator=(const CLASS &) = delete
 
-#define BASIC_INFO_PARMDECL \
+#define BASIC_PARMDECL \
     utils::SourceLocation s = utils::SourceLocation(), \
     std::unordered_set<std::string> f = std::unordered_set<std::string>(), \
     bool t = false
@@ -322,7 +324,7 @@ namespace syntax {
     struct ExprNode {
         DELETE_COPY(ExprNode);
         virtual ~ExprNode() {}
-        ExprNode(BASIC_INFO_PARMDECL)
+        ExprNode(BASIC_PARMDECL)
             : sl(s), freeVars(f), tail(t) {}
 
         virtual ExprNode* clone() const = 0;
@@ -348,7 +350,7 @@ namespace syntax {
     struct IntegerNode : public ExprNode {
         DELETE_COPY(IntegerNode);
         virtual ~IntegerNode() {}
-        IntegerNode(std::string v, BASIC_INFO_PARMDECL)
+        IntegerNode(std::string v, BASIC_PARMDECL)
             : ExprNode(s, f, t), val(std::move(v)) {}
 
         // covariant return type for override
@@ -380,7 +382,7 @@ namespace syntax {
     struct StringNode : public ExprNode {
         DELETE_COPY(StringNode);
         virtual ~StringNode() {}
-        StringNode(std::string v, BASIC_INFO_PARMDECL)
+        StringNode(std::string v, BASIC_PARMDECL)
             : ExprNode(s, f, t), val(std::move(v)) {}
 
         // covariant return type
@@ -411,7 +413,7 @@ namespace syntax {
     struct VariableNode : public ExprNode {
         DELETE_COPY(VariableNode);
         virtual ~VariableNode() {}
-        VariableNode(std::string n, BASIC_INFO_PARMDECL)
+        VariableNode(std::string n, BASIC_PARMDECL)
             : ExprNode(s, f, t), name(std::move(n)) {}
 
         virtual VariableNode* clone() const override {
@@ -444,7 +446,7 @@ namespace syntax {
             }
             delete expr;
         }
-        LambdaNode(std::vector<VariableNode*> v, ExprNode* e, BASIC_INFO_PARMDECL) :
+        LambdaNode(std::vector<VariableNode*> v, ExprNode* e, BASIC_PARMDECL) :
             ExprNode(s, f, t), varList(std::move(v)), expr(e) {}
 
         virtual LambdaNode* clone() const override {
@@ -518,7 +520,7 @@ namespace syntax {
         }
         LetrecNode(
             std::vector<std::pair<VariableNode*, ExprNode*>> v, ExprNode* e,
-            BASIC_INFO_PARMDECL) :
+            BASIC_PARMDECL) :
             ExprNode(s, f, t), varExprList(std::move(v)), expr(e) {}
 
         virtual LetrecNode* clone() const override {
@@ -597,7 +599,7 @@ namespace syntax {
             delete branch1;
             delete branch2;
         }
-        IfNode(ExprNode* c, ExprNode* b1, ExprNode* b2, BASIC_INFO_PARMDECL) :
+        IfNode(ExprNode* c, ExprNode* b1, ExprNode* b2, BASIC_PARMDECL) :
             ExprNode(s, f, t), cond(c), branch1(b1), branch2(b2) {}
 
         virtual IfNode* clone() const override {
@@ -654,7 +656,7 @@ namespace syntax {
                 delete e;
             }
         }
-        SequenceNode(std::vector<ExprNode*> e, BASIC_INFO_PARMDECL) :
+        SequenceNode(std::vector<ExprNode*> e, BASIC_PARMDECL) :
             ExprNode(s, f, t), exprList(std::move(e)) {}
 
         virtual SequenceNode* clone() const override {
@@ -720,7 +722,7 @@ namespace syntax {
                 delete a;
             }
         }
-        IntrinsicCallNode(std::string i, std::vector<ExprNode*> a, BASIC_INFO_PARMDECL):
+        IntrinsicCallNode(std::string i, std::vector<ExprNode*> a, BASIC_PARMDECL):
             ExprNode(s, f, t), intrinsic(std::move(i)), argList(std::move(a)) {}
 
         virtual IntrinsicCallNode* clone() const override {
@@ -784,7 +786,7 @@ namespace syntax {
                 delete a;
             }
         }
-        ExprCallNode(ExprNode* e, std::vector<ExprNode*> a, BASIC_INFO_PARMDECL) :
+        ExprCallNode(ExprNode* e, std::vector<ExprNode*> a, BASIC_PARMDECL) :
             ExprNode(s, f, t), expr(e), argList(std::move(a)) {}
 
         virtual ExprCallNode* clone() const override {
@@ -850,7 +852,7 @@ namespace syntax {
             delete var;
             delete expr;
         }
-        AtNode(VariableNode* v, ExprNode* e, BASIC_INFO_PARMDECL) :
+        AtNode(VariableNode* v, ExprNode* e, BASIC_PARMDECL) :
             ExprNode(s, f, t), var(v), expr(e) {}
 
         virtual AtNode* clone() const override {
@@ -892,7 +894,7 @@ namespace syntax {
         }
     };
 
-#undef BASIC_INFO_PARMDECL
+#undef BASIC_PARMDECL
 #undef DELETE_COPY
 
     ExprNode* parse(std::deque<Token> tokens) {
@@ -1122,7 +1124,6 @@ namespace runtime {
     using Value = std::variant<Void, Integer, String, Closure>;
 
     // stack layer
-
     struct Layer {
         // a default argument is evaluated each time the function is called without
         // that argument (not important here)
@@ -2688,6 +2689,17 @@ public:
         auto ret = "|" + serializedSource + " " + serializedState + "|";
         return ret;
     }
+    void clear() {
+        source.clear();
+        if (expr != nullptr) {
+            delete expr;
+            expr = nullptr;
+        }
+        stack.clear();
+        heap.clear();
+        numLiterals = 0;
+        resultLoc = -1;
+    }
 private:
     // states
     std::string source;
@@ -2706,7 +2718,7 @@ std::string readSource(const std::string& spath) {
     if (!std::filesystem::exists(spath)) {
         utils::panic("reader", spath + " does not exist.");
     }
-    static constexpr std::size_t BLOCK = 1024;
+    static constexpr std::size_t BLOCK = 8192;
     std::ifstream in(spath);
     in.exceptions(std::ios_base::badbit);
     std::string source;
@@ -2731,23 +2743,23 @@ int main(int argc, char** argv) {
             << serialization::join(
                 serialization::valueToSentence(state.getResult(), state.getExpr())) << std::endl;
 #else
-        // test the copy / move assignment operators for State
+        // test the (copy & move) (constructors & assignment operators) for State
         std::string source = readSource(argv[1]);
         State state1(source);
-        {
-            State state2(source);
-            {
-                State state3(source);
-                state2 = state3;
-                // destruct state3
-            }
-            state1 = std::move(state2);
-            // destruct state2
-        }
-        state1.execute();
+        State state2(state1);  // copy constructor
+        state1.clear();
+        State state3(std::move(state2));  // move constructor
+        state2.clear();
+        State state4(source);
+        state4 = state3;  // copy assignment operator
+        state3.clear();
+        State state5(source);
+        state5 = std::move(state4);  // move assignment operator
+        state4.clear();
+        state5.execute();
         std::cout << "<end-of-stdout>\n"
             << serialization::join(
-                serialization::valueToSentence(state1.getResult(), state1.getExpr())) << std::endl;
+                serialization::valueToSentence(state5.getResult(), state5.getExpr())) << std::endl;
 #endif
     }
     catch (const std::runtime_error& e) {

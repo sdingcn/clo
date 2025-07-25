@@ -2,7 +2,7 @@
 
 ![](https://github.com/sdingcn/clo/actions/workflows/CI.yml/badge.svg)
 
-**Clo** is a small, dynamically-typed, garbage-collected, functional programming language.
+**Clo** is a dynamically-typed garbage-collected programming language.
 ```
 <comment>   := "#" [^\n]* "\n"
 <intrinsic> := "." [^\s]+
@@ -18,9 +18,9 @@
 ```
 
 The distinguished feature of clo is serializing
-the current program state as a string.
+the program state as a string.
 The built-in function `.forkstate` returns
-a string encoding the program state,
+a string encoding the current state,
 and when the state is resumed using `.eval` it starts
 right after the `.forkstate` call but with a return value of Void type.
 This resembles Linux's `fork`, Lisp's `call/cc`, etc.
