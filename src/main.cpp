@@ -72,16 +72,9 @@ namespace utils {
         int column;
     };
 
-    void panic(
-        const std::string& type,
-        const std::string& msg,
-        const SourceLocation& sl = SourceLocation()
-    ) {
-        if (sl.line <= 0 || sl.column <= 0) {
-            throw std::runtime_error("[" + type + " error] " + msg);
-        } else {
-            throw std::runtime_error("[" + type + " error " + sl.toString() + "] " + msg);
-        }
+    void panic(const std::string& type, const std::string& msg,
+        const SourceLocation& sl = SourceLocation()) {
+        throw std::runtime_error("[" + type + " error " + sl.toString() + "] " + msg);
     }
 
 }  // namespace utils
@@ -92,29 +85,33 @@ namespace syntax {
     // lexer
     // ------------------------------
 
+    // quote and unquote are not double-side inverse functions of each other
+    // forall s, unquote(quote(s)) == s
+    // exists s, quote(unquote(s)) != s
+
     std::string quote(std::string s) {
         // Note: quote will not change newlines back to
         // the form "\\n" and thus can produce multi-line strings
         std::string r;
-        r += '\"';
+        r += '"';
         for (char c : s) {
             if (c == '\\') {
                 r += "\\\\";
             }
-            else if (c == '\"') {
+            else if (c == '"') {
                 r += "\\\"";
             }
             else {
                 r += c;
             }
         }
-        r += '\"';
+        r += '"';
         return r;
     }
 
     std::string unquote(std::string s) {
         int n = s.size();
-        if (!((n >= 2) && (s[0] == '\"') && (s[n - 1] == '\"'))) {
+        if (!((n >= 2) && (s[0] == '"') && (s[n - 1] == '"'))) {
             utils::panic("unquote", "invalid quoted string");
         }
         s = s.substr(1, n - 2);
