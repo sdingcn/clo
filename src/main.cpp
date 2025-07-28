@@ -21,8 +21,9 @@
 #include <vector>
 
 #define DBG(x) \
-    std::cerr << "[+] LINE " << __LINE__ \
-              << ": " << (x) << std::endl
+    std::cerr << "[debug]" << (x) << std::endl
+#define DBG_WITH_LINE(x) \
+    std::cerr << "[debug] (LINE " << __LINE__ << "): " << (x) << std::endl
 // TODO: add DBG everywhere and use a macro to control all of them
 
 namespace utils {
@@ -226,8 +227,8 @@ namespace syntax {
                 if (!hasDigit) {
                     utils::panic("lexer", "incomplete integer literal", startsl);
                 }
-                // string literal
             }
+            // string literal
             else if (ss.peekNext() == '"') {
                 text += ss.popNext();
                 bool complete = false;
@@ -252,26 +253,26 @@ namespace syntax {
                 if (!complete) {
                     utils::panic("lexer", "incomplete string literal", startsl);
                 }
-                // variable / keyword
             }
+            // variable / keyword
             else if (std::isalpha(ss.peekNext()) || ss.peekNext() == '_') {
                 while (ss.hasNext() && (
                     std::isalpha(ss.peekNext()) || std::isdigit(ss.peekNext()) ||
                     ss.peekNext() == '_')) {
                     text += ss.popNext();
                 }
-                // intrinsic
             }
+            // intrinsic
             else if (ss.peekNext() == '.') {
                 while (ss.hasNext() && !(std::isspace(ss.peekNext()) || ss.peekNext() == ')')) {
                     text += ss.popNext();
                 }
-                // special symbol
             }
+            // special symbol
             else if (std::string("(){}@").find(ss.peekNext()) != std::string::npos) {
                 text += ss.popNext();
-                // comment
             }
+            // comment
             else if (ss.peekNext() == '#') {
                 while (ss.hasNext() && ss.peekNext() != '\n') {
                     ss.popNext();
@@ -1039,8 +1040,8 @@ namespace syntax {
             }
             else if (tokens[0].text == "if") {
                 return parseIf();
-                // check keywords before var to avoid recognizing keywords as vars
             }
+            // check keywords before var to avoid recognizing keywords as vars
             else if (isVariableToken(tokens[0])) {
                 return parseVariable();
             }
@@ -1789,6 +1790,9 @@ class State {
     }
 public:
     State(std::string origin) {
+#ifdef DEBUG
+        DBG("constructor");
+#endif
         if (origin.size() == 0) {
             utils::panic("state constructor", "empty origin string");
         }
@@ -1956,9 +1960,15 @@ public:
         heap(state.heap),
         numLiterals(state.numLiterals),
         resultLoc(state.resultLoc) {
+#ifdef DEBUG
+        DBG("copy constructor");
+#endif
         _migrateAST(state, *this);
     }
     State& operator=(const State& state) {
+#ifdef DEBUG
+        DBG("copy assignment operator");
+#endif
         if (this != &state) {
             source = state.source;
             delete expr;
@@ -1978,9 +1988,15 @@ public:
         heap(std::move(state.heap)),
         numLiterals(state.numLiterals),
         resultLoc(state.resultLoc) {
+#ifdef DEBUG
+        DBG("move constructor");
+#endif
         state.expr = nullptr;
     }
     State& operator=(State&& state) {
+#ifdef DEBUG
+        DBG("move assignment operator");
+#endif
         if (this != &state) {
             source = std::move(state.source);
             delete expr;
@@ -1994,6 +2010,9 @@ public:
         return *this;
     }
     ~State() {
+#ifdef DEBUG
+        DBG("destructor");
+#endif
         if (expr != nullptr) {
             delete expr;
         }
@@ -2740,18 +2759,18 @@ int main(int argc, char** argv) {
             << serialization::join(
                 serialization::valueToSentence(state.getResult(), state.getExpr())) << std::endl;
 #else
-        // test the (copy & move) (constructors & assignment operators) for State
+        // test the copy control operators for State
         std::string source = readSource(argv[1]);
-        State state1(source);
-        State state2(state1);  // copy constructor
+        State state1(source);             // constructor
+        State state2(state1);             // copy constructor
         state1.clear();
         State state3(std::move(state2));  // move constructor
         state2.clear();
-        State state4(source);
-        state4 = state3;  // copy assignment operator
+        State state4(source);             // constructor
+        state4 = state3;                  // copy assignment operator
         state3.clear();
-        State state5(source);
-        state5 = std::move(state4);  // move assignment operator
+        State state5(source);             // constructor
+        state5 = std::move(state4);       // move assignment operator
         state4.clear();
         state5.execute();
         std::cout << "<end-of-stdout>\n"

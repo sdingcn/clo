@@ -24,6 +24,26 @@ def build(build_type: str) -> None:
         sys.exit(f"make failed\nresult = {res}")
     print(f"OK ({end - start:.3f} seconds)", flush = True)
 
+def check_copy_controls(err: str) -> bool:
+    start = """\
+[debug]constructor
+[debug]copy constructor
+[debug]move constructor
+[debug]constructor
+[debug]copy assignment operator
+[debug]constructor
+[debug]move assignment operator
+"""
+    end = """\
+[debug]destructor
+[debug]destructor
+[debug]destructor
+[debug]destructor
+[debug]destructor
+"""
+    # there may be calls to `.eval` so we only check the first layer of states
+    return err.startswith(start) and err.endswith(end)
+
 def test() -> None:
     for dirpath, _, filenames in os.walk("test/"):
         for filename in filenames:
@@ -37,7 +57,11 @@ def test() -> None:
                     end = time.time()
                     with open(filepath, "r") as f:
                         src = f.read()
-                    if (res[0] == 0 and res[1] == src + "<end-of-stdout>\n( vval )\n"):
+                    if (
+                        res[0] == 0 and
+                        res[1] == src + "<end-of-stdout>\n( vval )\n" and
+                        check_copy_controls(res[2])
+                    ):
                         print(f"OK ({end - start:.3f} seconds)", flush = True)
                     else:
                         sys.exit(f'test failed\nresult = {res}\n')
@@ -48,7 +72,11 @@ def test() -> None:
                     start = time.time()
                     res = execute(["bin/clo", filepath], io["in"])
                     end = time.time()
-                    if (res[0] == 0 and res[1] == io["out"]):
+                    if (
+                        res[0] == 0 and
+                        res[1] == io["out"] and
+                        check_copy_controls(res[2])
+                    ):
                         print(f"OK ({end - start:.3f} seconds)", flush = True)
                     else:
                         sys.exit(f'test failed\nresult = {res}\n')
