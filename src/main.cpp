@@ -2,6 +2,7 @@
 #include <cctype>
 #include <concepts>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <deque>
 #include <filesystem>
@@ -154,14 +155,10 @@ namespace syntax {
 
     struct SourceStream {
         SourceStream(std::string s) : source(std::move(s)) {
-            std::string charstr =
-                "`1234567890-=~!@#$%^&*()_+"
-                "qwertyuiopasdfghjklzxcvbnmQWERTYUIOPASDFGHJKLZXCVBNM"
-                "[]\\;',./{}|:\"<>? \t\n";
-            std::unordered_set<char> charset(charstr.begin(), charstr.end());
             sl.reset();
             for (char c : source) {
-                if (!charset.contains(c)) {
+                // only support ASCII characters
+                if (static_cast<unsigned char>(c) > 127) {
                     utils::panic("lexer", "unsupported character", sl);
                 }
                 sl.update(c);
@@ -228,7 +225,7 @@ namespace syntax {
                     utils::panic("lexer", "incomplete integer literal", startsl);
                 }
             }
-            // string literal
+            // string literal (terminated by non-escaped '"')
             else if (ss.peekNext() == '"') {
                 text += ss.popNext();
                 bool complete = false;
@@ -1088,9 +1085,9 @@ namespace runtime {
     };
 
     struct Integer {
-        Integer(int v) : value(v) {}
+        Integer(int64_t v) : value(v) {}
 
-        int value = 0;
+        int64_t value = 0;
     };
 
     struct String {  // for string literals, this class contains the unquoted ones
@@ -1564,7 +1561,7 @@ namespace serialization {
             return runtime::Void();
         }
         else if (s[1] == "ival") {
-            return runtime::Integer(std::stoi(s[2]));
+            return runtime::Integer(std::stoll(s[2]));
         }
         else if (s[1] == "sval") {
             return runtime::String(syntax::unquote(s[3]));
@@ -1733,14 +1730,14 @@ class State {
         expr->computeFreeVars();
         expr->computeTail(false);
         if (doPreAlloc) {
-            std::unordered_map<int, syntax::Location> integerLocationMap;
+            std::unordered_map<int64_t, syntax::Location> integerLocationMap;
             std::unordered_map<std::string, syntax::Location> stringLocationMap;
             std::function<void(syntax::ExprNode*)> preAllocate =
                 [this, &integerLocationMap, &stringLocationMap]
                 (syntax::ExprNode* e) -> void {
                 if (auto inode = dynamic_cast<syntax::IntegerNode*>(e)) {
                     // TODO: exceptions
-                    int ival = std::stoi(inode->val);
+                    int64_t ival = std::stoll(inode->val);
                     if (integerLocationMap.contains(ival)) {
                         inode->loc = integerLocationMap.at(ival);
                     } else {
@@ -1768,7 +1765,7 @@ class State {
                     // TODO: exceptions
                     for (int i = 0; i < numLiterals; i++) {
                         if (std::holds_alternative<runtime::Integer>(heap[i]) &&
-                            std::get<runtime::Integer>(heap[i]).value == std::stoi(inode->val)) {
+                            std::get<runtime::Integer>(heap[i]).value == std::stoll(inode->val)) {
                             inode->loc = i;
                             break;
                         }
@@ -2064,7 +2061,7 @@ private:
         }
         else if (name == "./") {
             _typecheck<runtime::Integer, runtime::Integer>(sl, args);
-            int d = std::get<runtime::Integer>(heap[args[1]]).value;
+            int64_t d = std::get<runtime::Integer>(heap[args[1]]).value;
             if (d == 0) {
                 utils::panic("runtime", "division by zero", sl);
             }
@@ -2072,7 +2069,7 @@ private:
         }
         else if (name == ".%") {
             _typecheck<runtime::Integer, runtime::Integer>(sl, args);
-            int d = std::get<runtime::Integer>(heap[args[1]]).value;
+            int64_t d = std::get<runtime::Integer>(heap[args[1]]).value;
             if (d == 0) {
                 utils::panic("runtime", "division by zero", sl);
             }
@@ -2181,7 +2178,7 @@ private:
         }
         else if (name == ".s->i") {
             _typecheck<runtime::String>(sl, args);
-            return runtime::Integer(std::stoi(std::get<runtime::String>(heap[args[0]]).value)
+            return runtime::Integer(std::stoll(std::get<runtime::String>(heap[args[0]]).value)
                 /* TODO: exceptions */);
         }
         else if (name == ".i->s") {
@@ -2190,7 +2187,7 @@ private:
         }
         else if (name == ".type") {
             _typecheck<runtime::Value>(sl, args);
-            int label = -1;
+            int64_t label = -1;
             if (std::holds_alternative<runtime::Void>(heap[args[0]])) {
                 label = 0;
             }
@@ -2252,7 +2249,7 @@ private:
         }
         else if (name == ".getint") {
             _typecheck<>(sl, args);
-            int v;
+            int64_t v;
             if (std::cin >> v) {
                 return runtime::Integer(v);
             }

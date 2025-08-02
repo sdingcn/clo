@@ -2,13 +2,13 @@
 
 ![](https://github.com/sdingcn/clo/actions/workflows/CI.yml/badge.svg)
 
-**Clo** is a dynamically-typed garbage-collected programming language.
+**Clo** is a dynamically-typed programming language with garbage collection.
 ```
 <comment>   := "#" [^\n]* "\n"
 <intrinsic> := "." [^\s]+
 <binding>   := <var> <expr>
 <callee>    := <intrinsic> | <expr>
-<expr>      := <int-literal> | <str-literal> | <var>
+<expr>      := <int64_t-literal> | <ASCII-str-literal> | <var>
             |  lambda ( <var>* ) <expr>
             |  letrec ( <binding>* ) <expr>
             |  if <expr> <expr> <expr>

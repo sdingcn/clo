@@ -1,0 +1,20 @@
+letrec (
+    putln lambda (x) {
+        if (.= (.type x) 1)
+            (.putstr (.i->s x))
+        if (.= (.type x) 2)
+            (.putstr x)
+        (.putstr "PLACEHOLDER")
+
+        (.putstr "\n")
+    }
+) {
+    (putln -1)
+    (putln 0)
+    (putln 2147483647)
+    (putln 9223372036854775807)
+    (putln "A\nB")
+    (putln "A
+B")
+    (putln "A\"B")
+}
