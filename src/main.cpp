@@ -1160,7 +1160,7 @@ namespace serialization {
     // so the group header is "(" "<label>" and has length 2 (two words)
     constexpr int groupHeaderLength = 2;
 
-    Sentence operator,(const Sentence& s1, const Sentence& s2) {
+    Sentence operator+(const Sentence& s1, const Sentence& s2) {
         Sentence s;
         for (auto& w : s1) {
             s.push_back(w);
@@ -1171,8 +1171,15 @@ namespace serialization {
         return s;
     }
 
+    void operator+=(Sentence& s1, const Sentence& s2) {
+        for (auto& w : s2) {
+            s1.push_back(w);
+        }
+    }
+
     Sentence slice(const Sentence& s0, int i, int j) {
         int s0Size = s0.size();
+        // when i == j, the slice is empty
         if (!(0 <= i && i <= j && j <= s0Size)) {
             utils::panic("serialization", "invalid slicing");
         }
@@ -1205,7 +1212,7 @@ namespace serialization {
             s0.pop_front();
             return s;
         } else {
-            utils::panic("serialization", "takeTo failed");
+            utils::panic("serialization", "takeTo failed (didn't find the target word)");
             // unreachable
             return Sentence();
         }
@@ -1489,7 +1496,7 @@ namespace serialization {
     Sentence pathToSentence(const Path& path) {
         Sentence s;
         s.push_back("[");
-        s.push_back("pth");
+        s.push_back("PA");
         for (int i : path) {
             s.push_back(std::to_string(i));
         }
@@ -1498,7 +1505,7 @@ namespace serialization {
     }
 
     Path sentenceToPath(const Sentence& s) {
-        if (s.size() < 3) {  // shortest sentence is [ pth ]
+        if (s.size() < 3) {  // shortest sentence is [ PA ]
             utils::panic("serialization", "sentence is invalid to be converted to path");
         }
         Path path;
@@ -1511,7 +1518,7 @@ namespace serialization {
     Sentence envToSentence(const runtime::Env& env) {
         Sentence s;
         s.push_back("[");
-        s.push_back("env");
+        s.push_back("EN");
         for (auto& p : env) {
             s.push_back(p.first);
             s.push_back(std::to_string(p.second));
@@ -1521,7 +1528,7 @@ namespace serialization {
     }
 
     runtime::Env sentenceToEnv(const Sentence& s) {
-        if (s.size() < 3) {  // shortest sentence is [ env ]
+        if (s.size() < 3) {  // shortest sentence is [ EN ]
             utils::panic("serialization", "sentence is invalid to be converted to env");
         }
         runtime::Env env;
@@ -1533,40 +1540,40 @@ namespace serialization {
 
     Sentence valueToSentence(const runtime::Value& v, const syntax::ExprNode* root) {
         if (std::holds_alternative<runtime::Void>(v)) {
-            return {"(", "vval", ")"};
+            return {"(", "VV", ")"};
         }
         else if (std::holds_alternative<runtime::Integer>(v)) {
             auto i = std::get<runtime::Integer>(v);
-            return {"(", "ival", std::to_string(i.value), ")"};
+            return {"(", "IV", std::to_string(i.value), ")"};
         }
         else if (std::holds_alternative<runtime::String>(v)) {
             auto s = std::get<runtime::String>(v);
             std::string quoted = syntax::quote(s.value);
             int len = quoted.size();
-            return {"(", "sval", std::to_string(len), quoted, ")"};
+            return {"(", "SV", std::to_string(len), quoted, ")"};
         }
         else {
             auto c = std::get<runtime::Closure>(v);
-            Sentence head = {"(", "cval"};
+            Sentence head = {"(", "CV"};
             Sentence tail = {")"};
-            return (head, envToSentence(c.env), pathToSentence(encodeNodePath(c.fun, root)), tail);
+            return head + envToSentence(c.env) + pathToSentence(encodeNodePath(c.fun, root)) + tail;
         }
     }
 
     runtime::Value sentenceToValue(const Sentence& s, const syntax::ExprNode* root) {
-        if (s.size() < 3) {  // shortest sentence is ( vval )
+        if (s.size() < 3) {  // shortest sentence is ( VV )
             utils::panic("serialization", "sentence is invalid to be converted to value");
         }
-        if (s[1] == "vval") {
+        if (s[1] == "VV") {
             return runtime::Void();
         }
-        else if (s[1] == "ival") {
+        else if (s[1] == "IV") {
             return runtime::Integer(std::stoll(s[2]));
         }
-        else if (s[1] == "sval") {
+        else if (s[1] == "SV") {
             return runtime::String(syntax::unquote(s[3]));
         }
-        else if (s[1] == "cval") {
+        else if (s[1] == "CV") {
             int pathIndex = -1;
             int sentenceSize = s.size();
             // finding the start of path
@@ -1592,56 +1599,59 @@ namespace serialization {
     }
 
     Sentence layerToSentence(const runtime::Layer& layer, const syntax::ExprNode* root) {
-        Sentence serializedLayer = {"<", "lay"};
+        Sentence serializedLayer = {"<", "LA"};
         // bool frame;
         if (layer.frame) {
-            serializedLayer.push_back("!fr");
+            serializedLayer.push_back("FR");
         }
         else {
-            serializedLayer.push_back("!nfr");
+            serializedLayer.push_back("NF");
         }
         // std::shared_ptr<Env> env;
         if (layer.frame) {
-            serializedLayer = (serializedLayer, envToSentence(layer.env));
+            serializedLayer += envToSentence(layer.env);
         }
-        // const syntax::ExprNode *expr;
+        // const syntax::ExprNode *expr; (the main frame's expr is null)
         if (layer.expr != nullptr) {
-            serializedLayer = (serializedLayer, pathToSentence(encodeNodePath(layer.expr, root)));
+            serializedLayer += pathToSentence(encodeNodePath(layer.expr, root));
         }
         else {
             // the case of main frame
-            Sentence dummyPathSentence = {"[", "pth", "-1", "]"};
-            serializedLayer = (serializedLayer, dummyPathSentence);
+            Sentence dummyPathSentence = {"[", "PA", "-1", "]"};
+            serializedLayer += dummyPathSentence;
         }
         // int pc;
-        Sentence pcSentence = {"(", "pc", std::to_string(layer.pc), ")"};
-        serializedLayer = (serializedLayer, pcSentence);
+        Sentence pcSentence = {"(", "PC", std::to_string(layer.pc), ")"};
+        serializedLayer += pcSentence;
         // std::vector<Location> local;
-        Sentence head = {"[", "lok"};
-        Sentence body;
+        Sentence localHead = {"[", "LO"};
+        Sentence localBody;
         for (auto& l : layer.local) {
-            body.push_back(std::to_string(l));
+            localBody.push_back(std::to_string(l));
         }
-        Sentence tail = {"]"};
+        Sentence localTail = {"]"};
         Sentence end = {">"};
-        serializedLayer = (serializedLayer, head, body, tail, end);
+        serializedLayer = serializedLayer + localHead + localBody + localTail + end;
         return serializedLayer;
     }
 
     runtime::Layer sentenceToLayer(
         const Sentence& s, const syntax::ExprNode* root) {
-        if (s.size() < 4) {  // shortest sentence is < lay *fr >
+        if (s.size() < 14) {  // shortest sentence is < LA NF [ PA ] ( PC _ ) [ LO ] >
             utils::panic("serialization", "sentence is invalid to be converted to layer");
         }
         // bool frame;
-        if (!(s[groupHeaderLength] == "!fr" || s[groupHeaderLength] == "!nfr")) {
+        if (!(s[groupHeaderLength] == "FR" || s[groupHeaderLength] == "NF")) {
             utils::panic("serialization", "didn't find a valid frame label");
         }
-        bool frame = (s[groupHeaderLength] == "!fr");
+        bool frame = (s[groupHeaderLength] == "FR");
         // Env env;
         runtime::Env env;
         int nextPos = groupHeaderLength + 1;
         if (frame) {
+            if (nextPos + groupHeaderLength >= static_cast<int>(s.size())) {
+                utils::panic("serialization", "didn't find valid env in (frame) layer");
+            }
             int sentenceSize = s.size();
             int start = nextPos;
             for (int i = start; i < sentenceSize; i++) {
@@ -1651,7 +1661,7 @@ namespace serialization {
                 }
             }
             if (nextPos == groupHeaderLength + 1) {
-                utils::panic("serialization", "didn't find valid env in frame layer");
+                utils::panic("serialization", "didn't find valid env end (\"]\") in frame layer");
             }
             env = sentenceToEnv(slice(s, start, nextPos));
         }
@@ -1664,8 +1674,8 @@ namespace serialization {
         if (s[nextPos + groupHeaderLength] != "-1") {
             // this includes the case of empty path ("]")
             int start = nextPos;
-            int serSize = s.size();
-            for (int i = nextPos; i < serSize; i++) {
+            int sentenceSize = s.size();
+            for (int i = nextPos; i < sentenceSize; i++) {
                 if (s[i] == "]") {
                     nextPos = i + 1;
                     break;
@@ -1677,9 +1687,13 @@ namespace serialization {
             expr = decodeNodePath(sentenceToPath(slice(s, start, nextPos)), root);
         } else {
             // dummy path (for the main frame)
+            if (s[nextPos + groupHeaderLength + 1] != "]") {
+                utils::panic("serialization", "didn't find valid path end (\"]\") in layer");
+            }
             nextPos += (groupHeaderLength + 2);
         }
         // int pc;
+        // doesn't currently check "(", etc.
         if (nextPos + groupHeaderLength >= static_cast<int>(s.size())) {
             utils::panic("serialization", "didn't find pc");
         }
@@ -1688,12 +1702,13 @@ namespace serialization {
         // std::vector<syntax::Location> local;
         // s[nextPos + groupHeaderLength] should at least be "]"
         if (nextPos + groupHeaderLength >= static_cast<int>(s.size())) {
-            utils::panic("serialization", "didn't find valid lok");
+            utils::panic("serialization", "didn't find valid local");
         }
         std::vector<syntax::Location> local;
         int sentenceSize = s.size();
         for (int i = nextPos + groupHeaderLength; i < sentenceSize; i++) {
             if (s[i] == "]") {
+                // doesn't currently check that "]" exists
                 break;
             }
             local.push_back(std::stoi(s[i]));
@@ -1808,13 +1823,17 @@ public:
             // skipped (_populateStaticAnalysisResults may have created some heap entries)
             // (5) literal boundary initialization
             numLiterals = heap.size();
-            // (6) result location initialization (no result yet)
+            // (6) gc threshold initialization
+            // can choose different initial values here
+            gcThreshold = numLiterals + 64;
+            // (7) result location initialization (no result yet)
             resultLoc = -1;
         }
         else {  // origin is serialized state
             int originLen = origin.size();
             std::string sourceLenStr;
-            for (int i = std::string("|{ src ").size(); i < originLen; i++) {
+            // the following assumes a lot of things in the serialized state...
+            for (int i = std::string("|{ SR ").size(); i < originLen; i++) {
                 if (std::isdigit(origin[i])) {
                     sourceLenStr += origin[i];
                 }
@@ -1849,7 +1868,7 @@ public:
                 while (sin >> word) {
                     sentence.push_back(word);
                     // special treatment of string values
-                    if (word == "sval" && sentence.size() > 1 && *(sentence.rbegin() + 1) == "(") {
+                    if (word == "SV" && sentence.size() > 1 && *(sentence.rbegin() + 1) == "(") {
                         sin >> word;
                         sentence.push_back(word);
                         int len = std::stoi(word);
@@ -1873,56 +1892,65 @@ public:
                         }
                         sentence.push_back(word);
                     }
+                    // continue to normal word processing
                 }
             }
             auto stackSentence = serialization::takeTo(sentence, "}");
-            if (stackSentence.size() < 3) {  // { stk }
+            if (stackSentence.size() < 3) {  // { ST }
                 utils::panic("serialization", "invalid stack");
             }
             stackSentence.pop_front();  // "{"
-            stackSentence.pop_front();  // "stk"
+            stackSentence.pop_front();  // "ST"
             while (stackSentence.size() > 0 && stackSentence.front() == "<") {
                 auto layerSentence = serialization::takeTo(stackSentence, ">");
+                // Note: construct the layer's AST pointer in the new tree
                 stack.push_back(serialization::sentenceToLayer(layerSentence, expr));
             }
             if (stackSentence.empty() || stackSentence.front() != "}") {
                 utils::panic("serialization", "invalid stack terminator");
             }
-            stackSentence.pop_front();  // "}"; this isn't really necessary here
+            stackSentence.pop_front();  // "}"
             // (4) heap initialization
             auto heapSentence = serialization::takeTo(sentence, "}");
-            if (heapSentence.size() < 3) {  // { hp }
+            if (heapSentence.size() < 3) {  // { HE }
                 utils::panic("serialization", "invalid heap");
             }
             heapSentence.pop_front();  // "{"
-            heapSentence.pop_front();  // "hp"
+            heapSentence.pop_front();  // "HE"
             while (heapSentence.size() > 0 && heapSentence.front() == "(") {
                 auto valueSentence = serialization::takeTo(heapSentence, ")");
-                heap.push_back(serialization::sentenceToValue(
-                    valueSentence, expr
-                ));
+                heap.push_back(serialization::sentenceToValue(valueSentence, expr));
             }
             if (heapSentence.empty() || heapSentence.front() != "}") {
                 utils::panic("serialization", "invalid heap terminator");
             }
-            heapSentence.pop_front();  // "}"; this isn't really necessary here
+            heapSentence.pop_front();  // "}"
             // (5) literal boundary initialization
             if (sentence.size() < 4) {
                 utils::panic("serialization", "incomplete literal boundary");
             }
             sentence.pop_front();  // "{"
-            sentence.pop_front();  // "nLit"
+            sentence.pop_front();  // "NL"
             numLiterals = std::stoi(sentence.front());
-            sentence.pop_front();  // <nLit>
+            sentence.pop_front();  // numLiterals
             sentence.pop_front();  // "}"
-            // (6) result location initialization
+            // (6) gc threshold initialization
+            if (sentence.size() < 4) {
+                utils::panic("serialization", "incomplete gc threshold");
+            }
+            sentence.pop_front();  // "{"
+            sentence.pop_front();  // "GT"
+            gcThreshold = std::stoi(sentence.front());
+            sentence.pop_front();  // gcThreshold
+            sentence.pop_front();  // "}"
+            // (7) result location initialization
             if (sentence.size() < 4) {
                 utils::panic("serialization", "incomplete result location");
             }
             sentence.pop_front();  // "{"
-            sentence.pop_front();  // "rLoc"
+            sentence.pop_front();  // "RL"
             resultLoc = std::stoi(sentence.front());
-            sentence.pop_front();  // <rLoc>
+            sentence.pop_front();  // resultLoc
             sentence.pop_front();  // "}"; this isn't really necessary here
             // _populateStaticAnalysisResults don't do preAlloc
             // because heap will be reconstructed
@@ -1956,6 +1984,7 @@ public:
         stack(state.stack),
         heap(state.heap),
         numLiterals(state.numLiterals),
+        gcThreshold(state.gcThreshold),
         resultLoc(state.resultLoc) {
 #ifdef DEBUG
         DBG("copy constructor");
@@ -1968,11 +1997,12 @@ public:
 #endif
         if (this != &state) {
             source = state.source;
-            delete expr;
+            delete expr;  // other parts don't own the AST
             expr = state.expr->clone();
             stack = state.stack;
             heap = state.heap;
             numLiterals = state.numLiterals;
+            gcThreshold = state.gcThreshold;
             resultLoc = state.resultLoc;
             _migrateAST(state, *this);
         }
@@ -1984,6 +2014,7 @@ public:
         stack(std::move(state.stack)),
         heap(std::move(state.heap)),
         numLiterals(state.numLiterals),
+        gcThreshold(state.gcThreshold),
         resultLoc(state.resultLoc) {
 #ifdef DEBUG
         DBG("move constructor");
@@ -2002,6 +2033,7 @@ public:
             stack = std::move(state.stack);
             heap = std::move(state.heap);
             numLiterals = state.numLiterals;
+            gcThreshold = state.gcThreshold;
             resultLoc = state.resultLoc;
         }
         return *this;
@@ -2404,6 +2436,7 @@ private:
     }
 public:
     // returns true iff the step is completed without reaching the end of evaluation
+    // Note: running step() only will not automatically run the garbage collection; see execute()
     bool step() {
         // be careful! this reference may be invalidated after modifying the stack
         // so always keep stack change as the last operation(s)
@@ -2646,20 +2679,14 @@ public:
         return true;
     }
     void execute() {
-        // can choose different initial values here
-        // Note: when the program state is recovered
-        // from de-serialization, the value of gc_threshold
-        // is not preserved and will re-start from this initial value
-        // when calling execute().
-        int gc_threshold = numLiterals + 64;
         while (step()) {
             int total = heap.size();
-            if (total > gc_threshold) {
+            if (total > gcThreshold) {
                 int removed = _gc();
                 int live = total - removed;
                 // see also "Optimal heap limits for reducing browser memory use" (OOPSLA 2022)
                 // for the square root solution
-                gc_threshold = live * 2;
+                gcThreshold = live * 2;
             }
         }
     }
@@ -2669,34 +2696,37 @@ public:
     const syntax::ExprNode* getExpr() const {
         return expr;
     }
-    // TODO: record GC state?
     std::string serialize() const {
         // std::string source;
         std::string serializedSource =
-            "{ src " + std::to_string(source.size()) + " ^" + source + " }";
+            "{ SR " + std::to_string(source.size()) + " ^" + source + " }";
         // syntax::ExprNode *expr;
         // (skipped, because source is more accurate)
         std::string serializedState;
         // std::vector<Layer> stack;
-        serializedState += "{ stk";
+        serializedState += "{ ST";  // no leading space
         for (auto& layer : stack) {
             serializedState += " ";
             serializedState += serialization::join(serialization::layerToSentence(layer, expr));
         }
         serializedState += " }";
         // std::vector<Value> heap;
-        serializedState += " { hp";
+        serializedState += " { HE";  // leading space
         for (auto& value : heap) {
             serializedState += " ";
             serializedState += serialization::join(serialization::valueToSentence(value, expr));
         }
         serializedState += " }";
         // int numLiterals;
-        serializedState += " { nLit ";
+        serializedState += " { NL ";
         serializedState += std::to_string(numLiterals);
         serializedState += " }";
+        // int gcThreshold;
+        serializedState += " { GT ";
+        serializedState += std::to_string(gcThreshold);
+        serializedState += " }";
         // Location resultLoc;
-        serializedState += " { rLoc ";
+        serializedState += " { RL ";
         serializedState += std::to_string(resultLoc);
         serializedState += " }";
         auto ret = "|" + serializedSource + " " + serializedState + "|";
@@ -2711,6 +2741,7 @@ public:
         stack.clear();
         heap.clear();
         numLiterals = 0;
+        gcThreshold = 64;
         resultLoc = -1;
     }
 private:
@@ -2720,6 +2751,7 @@ private:
     std::vector<runtime::Layer> stack;
     std::vector<runtime::Value> heap;
     int numLiterals;
+    int gcThreshold;
     syntax::Location resultLoc;
 };
 

@@ -1,4 +1,4 @@
 {
     "in" : "65535",
-    "out" : "<end-of-stdout>\n( ival 2147450880 )\n"
+    "out" : "<end-of-stdout>\n( IV 2147450880 )\n"
 }

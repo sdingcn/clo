@@ -1,4 +1,4 @@
 {
     "in" : "",
-    "out" : "<end-of-stdout>\n( ival 120 )\n"
+    "out" : "<end-of-stdout>\n( IV 120 )\n"
 }

@@ -59,7 +59,7 @@ def test() -> None:
                         src = f.read()
                     if (
                         res[0] == 0 and
-                        res[1] == src + "<end-of-stdout>\n( vval )\n" and
+                        res[1] == src + "<end-of-stdout>\n( VV )\n" and
                         check_copy_controls(res[2])
                     ):
                         print(f"OK ({end - start:.3f} seconds)", flush = True)
