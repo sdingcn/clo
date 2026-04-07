@@ -41,6 +41,8 @@ Note: `.eval` works on both source code and serialized program state.
 
 See [test/](test/) for more code examples (`*.clo`).
 
+See [bad/](bad/) for example(s) of bug-triggering inputs found by Codex.
+
 ## dependencies
 
 The source code of the interpreter

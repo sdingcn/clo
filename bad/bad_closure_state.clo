@@ -1,0 +1,2 @@
+|{ SR 3 ^(f) } { ST < LA FR [ EN f 0 ] [ PA -1 ] ( PC 0 ) [ LO ] > < LA NF [ PA ] ( PC 0 ) [ LO ] > } { HE ( CV [ EN ] [ PA ] ) } { NL 0 } { GT 64 } { RL -1 }|
+
